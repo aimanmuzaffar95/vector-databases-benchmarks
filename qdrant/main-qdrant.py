@@ -2,14 +2,19 @@
 import os
 import time
 import pandas as pd
-import wget
 
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-CSV_URL = "https://raw.githubusercontent.com/openai/openai-cookbook/main/examples/data/AG_news_samples.csv"
-CSV_PATH = "AG_news_samples.csv"
+CSV_PATH = "train.csv"
+
+LABEL_MAP = {
+    1: "World",
+    2: "Sports",
+    3: "Business",
+    4: "Sci/Tech",
+}
 
 QDRANT_URL = "http://localhost:6333"
 COLLECTION_NAME = "news_articles"
@@ -42,6 +47,11 @@ def wait_until_collection_available(client: QdrantClient, collection: str, timeo
 
 def bytes_to_mb(b: int) -> float:
     return b / (1024 * 1024)
+
+
+def build_passage_text(title: str, description: str) -> str:
+    combined = f"{title.strip()} {description.strip()}".strip()
+    return f"passage: {combined}"
 
 
 def chunk_ranges(total: int, batch: int):
@@ -83,29 +93,31 @@ def wait_until_optimized(client: QdrantClient, collection: str) -> float:
 
 def main():
     print("Qdrant:", QDRANT_URL)
-    print("Collection:", COLLECTION_NAME)
-    print("Distance:", "Cosine")
     print("Model:", MODEL_NAME)
 
-    # 1) Download CSV
+    # 1) Load local CSV
     if not os.path.exists(CSV_PATH):
-        print(f"Downloading: {CSV_URL}")
-        wget.download(CSV_URL, CSV_PATH)
-        print("\nDownloaded.")
-    else:
-        print(f"CSV already exists: {CSV_PATH}")
+        raise FileNotFoundError(f"Local dataset not found: {CSV_PATH}")
+    print(f"Using local dataset: {CSV_PATH}")
 
     csv_size_mb = bytes_to_mb(os.path.getsize(CSV_PATH))
 
     # 2) Load data
     df = pd.read_csv(CSV_PATH)
-    for col in ["title", "description", "label"]:
-        if col not in df.columns:
-            raise ValueError(f"Missing column '{col}'. Found: {list(df.columns)}")
+    expected_columns = {"Class Index", "Title", "Description"}
+    received_columns = set(df.columns)
+    if not expected_columns.issubset(received_columns):
+        raise ValueError(f"Missing column(s). Expected: {expected_columns}, Found: {received_columns}")
 
+    df = df.rename(columns={
+        "Class Index": "label",
+        "Title": "title",
+        "Description": "description",
+    })
+
+    df["label"] = df["label"].map(LABEL_MAP).fillna("Unknown")
     df["title"] = df["title"].fillna("")
     df["description"] = df["description"].fillna("")
-    df["label"] = df["label"].fillna("")
 
     records_count = len(df)
     print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
@@ -122,8 +134,11 @@ def main():
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
 
-    # 4) Encode embeddings
-    texts = df["description"].tolist()
+    # 4) Encode embeddings (E5 format: passage-prefixed title + description)
+    texts = [
+        build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
+        for i in range(records_count)
+    ]
     print("Encoding embeddings...")
     t_emb0 = time.perf_counter()
     embeddings = model.encode(texts, show_progress_bar=True)
@@ -147,7 +162,7 @@ def main():
     )
 
     # 7) Upsert + time to write
-    print(f"Upserting into Qdrant (batch_size={BATCH_SIZE})...")
+    print(f"Inserting into Qdrant (batch_size={BATCH_SIZE})...")
     t_write0 = time.perf_counter()
 
     for start, end in chunk_ranges(records_count, BATCH_SIZE):
@@ -180,7 +195,7 @@ def main():
 
 
     # 8) Index/build time definition: time until optimized/ready after insert
-    print("Waiting for collection to be optimized/ready (timed)...")
+    print("Building Qdrant index...")
     index_seconds = wait_until_optimized(client, COLLECTION_NAME)
 
     # 9) Verify count
@@ -191,12 +206,12 @@ def main():
     approx_vec_mb = bytes_to_mb(points_count * EXPECTED_DIM * 4)
 
     print("\n==== SUMMARY ====")
-    print(f"Points inserted            : {points_count}")
+    print(f"Rows inserted              : {points_count}")
     print(f"CSV size (MB)              : {csv_size_mb:.2f}")
     print(f"Approx embedding data (MB) : {approx_vec_mb:.2f} (float32 vectors only)")
     print(f"Embedding time (s)         : {embed_seconds:.3f}")
-    print(f"Write time (s)             : {write_seconds:.3f}")
-    print(f"Index ready/optimized (s)  : {index_seconds:.3f}")
+    print(f"DB write time (s)          : {write_seconds:.3f}")
+    print(f"Index build time (s)       : {index_seconds:.3f}")
     print("=================\n")
 
 
