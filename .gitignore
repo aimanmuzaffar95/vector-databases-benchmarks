@@ -54,3 +54,7 @@ volumes/
 
 # Local benchmark outputs
 *.csv.tmp
+
+# FAISS local artifacts
+faiss/artifacts/
+*.faiss

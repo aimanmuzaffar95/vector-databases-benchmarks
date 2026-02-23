@@ -7,6 +7,7 @@ Backends:
 - Qdrant
 - Weaviate
 - Milvus
+- FAISS
 
 ## Repository Layout
 
@@ -18,6 +19,8 @@ Backends:
 - `weaviate/benchmark_weaviate.py`
 - `milvus/insert-data-milvus.py`
 - `milvus/benchmark_milvus.py`
+- `faiss/insert-data-faiss.py`
+- `faiss/benchmark_faiss.py`
 - `docker-compose-pgvector.yml`
 - `docker-compose-qdrant.yml`
 - `docker-compose-weviate.yml`
@@ -32,7 +35,7 @@ Backends:
 Install dependencies:
 
 ```bash
-pip install pandas sqlalchemy psycopg2-binary sentence-transformers numpy qdrant-client weaviate-client pymilvus
+pip install pandas sqlalchemy psycopg2-binary sentence-transformers numpy qdrant-client weaviate-client pymilvus faiss-cpu
 ```
 
 ## Start Databases
@@ -91,6 +94,14 @@ python3 milvus/insert-data-milvus.py --distance dot
 python3 milvus/insert-data-milvus.py --distance l2
 ```
 
+FAISS:
+
+```bash
+python3 faiss/insert-data-faiss.py --distance cosine --index-type hnsw --overwrite
+python3 faiss/insert-data-faiss.py --distance dot --index-type ivfflat --ivf-nlist 1024 --overwrite
+python3 faiss/insert-data-faiss.py --distance l2 --index-type flat --overwrite
+```
+
 Milvus distance aliases:
 - `dot` is mapped to Milvus `IP`
 - `euclid` / `euclidean` are mapped to `L2`
@@ -135,6 +146,15 @@ python3 milvus/benchmark_milvus.py --distance cosine --nprobe 8,16,32
 python3 milvus/benchmark_milvus.py --distance cosine --k-values 1,5,10 --num-queries 200
 ```
 
+FAISS:
+
+```bash
+python3 faiss/benchmark_faiss.py
+python3 faiss/benchmark_faiss.py --k-values 1,5,10 --num-queries 500
+python3 faiss/benchmark_faiss.py --nprobe 4,8,16,32
+python3 faiss/benchmark_faiss.py --hnsw-ef-search 32,64,128,256
+```
+
 ## Environment Variables
 
 Shared:
@@ -162,6 +182,10 @@ Milvus:
 - `MILVUS_PORT` (default: `19530`)
 - ingest: `MILVUS_COLLECTION`, `MILVUS_INDEX_NAME`, `MILVUS_DISTANCE`/`MILVUS_METRIC`, `MILVUS_HNSW_M`, `MILVUS_HNSW_EF_CONSTRUCTION`, `BATCH_SIZE`, `RECREATE_COLLECTION`
 - benchmark: `MILVUS_COLLECTION`, `MILVUS_DISTANCE`/`MILVUS_METRIC`, `MILVUS_CONSISTENCY_LEVEL`
+
+FAISS:
+- ingest: `FAISS_DISTANCE`, `FAISS_INDEX_TYPE`, `FAISS_IVF_NLIST`, `FAISS_HNSW_M`, `FAISS_OUTPUT_DIR`, `BATCH_SIZE`
+- benchmark: `FAISS_OUTPUT_DIR`
 
 ## Notes
 
