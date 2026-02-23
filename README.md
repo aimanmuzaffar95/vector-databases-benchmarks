@@ -1,147 +1,137 @@
-# PGVector + Qdrant News Embedding Demo
+# Vector DB Embedding Ingest + Recall Benchmarks
 
-This project demonstrates how to:
-- ingest a news dataset,
-- generate sentence embeddings,
-- store vectors in either **PostgreSQL + pgvector** or **Qdrant**,
-- run semantic search, and
-- benchmark retrieval quality (Recall@K) for pgvector.
+This repo ingests `train.csv`, creates embeddings with `intfloat/e5-large-v2` (1024 dims), stores vectors in:
+- PostgreSQL + pgvector
+- Qdrant
+- Weaviate
 
-The default embedding model is `intfloat/e5-large-v2` (1024 dimensions).
+It also benchmarks Recall@K and latency for each backend.
 
-## Project Structure
+## Repository Layout
 
-- `train.csv`  
-  Input dataset used by the pgvector pipeline (`Class Index`, `Title`, `Description`).
-- `pgvector/main.py`  
-  Loads `train.csv`, builds embeddings, recreates `news_articles`, inserts vectors, builds HNSW index.
-- `pgvector/search_pgvector.py`  
-  Runs semantic search against pgvector table using editable in-file variables.
-- `pgvector/benchmark_pgvector_recallAtK.py`  
-  Benchmarks pgvector retrieval recall/latency with optional ANN parameter sweeps.
-- `qdrant/main-qdrant.py`  
-  Ingests dataset and vectors into Qdrant collection.
-- `docker-compose.yml`  
-  Postgres + pgAdmin setup.
-- `docker-compose-qdrant.yml`  
-  Qdrant setup.
-- `db/init/001_enable_pgvector.sql`  
-  Enables pgvector extension.
+- `pgvector/insert-data-pgvector.py`
+- `pgvector/benchmark_pgvector.py`
+- `qdrant/insert-data-qdrant.py`
+- `qdrant/benchmark_qdrant.py`
+- `weaviate/insert-data-weaviate.py`
+- `weaviate/benchmark_weaviate.py`
+- `docker-compose-pgvector.yml`
+- `docker-compose-qdrant.yml`
+- `docker-compose-weviate.yml`
+- `train.csv`
 
 ## Requirements
 
 - Python 3.9+
 - Docker + Docker Compose
-- Recommended Python packages:
-  - `pandas`
-  - `sqlalchemy`
-  - `psycopg2-binary`
-  - `sentence-transformers`
-  - `numpy`
-  - `qdrant-client`
-  - `wget`
 
-Install dependencies (inside your virtual environment):
+Install Python deps:
 
 ```bash
-pip install pandas sqlalchemy psycopg2-binary sentence-transformers numpy qdrant-client wget
+pip install pandas sqlalchemy psycopg2-binary sentence-transformers numpy qdrant-client weaviate-client
 ```
 
-## 1) Start PostgreSQL + pgvector
+## Start Databases
 
-From the project root:
+pgvector:
 
 ```bash
-docker compose up -d
+docker compose -f docker-compose-pgvector.yml up -d
 ```
 
-Default DB connection used by scripts:
-
-`postgresql+psycopg2://postgres:postgres@localhost:5432/appdb`
-
-Optional pgAdmin:
-- URL: `http://localhost:5050`
-- Email: `admin@example.com`
-- Password: `admin`
-
-## 2) Ingest vectors into pgvector
-
-Run:
-
-```bash
-python3 pgvector/main.py
-```
-
-What it does:
-- validates `train.csv` format,
-- maps labels (1/2/3/4 -> World/Sports/Business/Sci/Tech),
-- builds E5-style passage embeddings (`passage: <title + description>`),
-- drops and recreates `news_articles`,
-- inserts vectors and builds HNSW cosine index.
-
-## 3) Search vectors in pgvector
-
-Edit these variables in `pgvector/search_pgvector.py`:
-- `QUERY_TEXT` or `QUERY_FILE`
-- `TOP_K`
-- `GENRE_FILTER` (optional)
-- `MODEL_NAME` (must match ingestion model)
-
-Then run:
-
-```bash
-python3 pgvector/search_pgvector.py
-```
-
-Notes:
-- Query is encoded as E5-style `query: <text>`.
-- Search uses cosine distance (`<=>`) and returns top-k rows with similarity score.
-
-## 4) Benchmark pgvector Recall@K
-
-Basic benchmark:
-
-```bash
-python3 pgvector/benchmark_pgvector_recallAtK.py
-```
-
-Custom settings:
-
-```bash
-python3 pgvector/benchmark_pgvector_recallAtK.py --k-values 1,5,10 --num-queries 500 --metric cosine
-```
-
-Optional sweeps:
-
-```bash
-python3 pgvector/benchmark_pgvector_recallAtK.py --metric cosine --hnsw-ef-search 20,40,80,120
-python3 pgvector/benchmark_pgvector_recallAtK.py --metric cosine --ivfflat-probes 1,5,10,20,50
-```
-
-## Optional: Qdrant Pipeline
-
-Start Qdrant:
+Qdrant:
 
 ```bash
 docker compose -f docker-compose-qdrant.yml up -d
 ```
 
-Run Qdrant ingest:
+Weaviate:
 
 ```bash
-python3 qdrant/main-qdrant.py
+docker compose -f docker-compose-weviate.yml up -d
 ```
 
-This script downloads/uses `AG_news_samples.csv`, embeds descriptions, recreates `news_articles` collection, and upserts vectors in batches.
+## Ingest Data
 
-## Common Troubleshooting
+pgvector:
 
-- `ModuleNotFoundError: No module named 'psycopg2'`  
-  Install driver: `pip install psycopg2-binary`.
+```bash
+python3 pgvector/insert-data-pgvector.py
+```
 
-- pgvector operator/type errors (`No operator matches...`)  
-  Ensure query vector is cast to `vector` and connection points to the correct DB/table populated by `pgvector/main.py`.
+qdrant:
 
-- Poor search relevance  
-  Re-run `pgvector/main.py` after changing embedding logic/model so stored vectors and query encoding stay aligned.
+```bash
+python3 qdrant/insert-data-qdrant.py
+```
 
+weaviate (`--distance` added):
+
+```bash
+python3 weaviate/insert-data-weaviate.py --distance cosine
+python3 weaviate/insert-data-weaviate.py --distance dot
+python3 weaviate/insert-data-weaviate.py --distance l2
+```
+
+Valid Weaviate distance values:
+- `cosine`
+- `dot`
+- `l2`
+
+## Run Benchmarks
+
+pgvector:
+
+```bash
+python3 pgvector/benchmark_pgvector.py
+python3 pgvector/benchmark_pgvector.py --metric cosine --k-values 1,5,10 --num-queries 500
+python3 pgvector/benchmark_pgvector.py --metric ip --hnsw-ef-search 20,40,80,120
+python3 pgvector/benchmark_pgvector.py --metric cosine --ivfflat-probes 1,5,10,20,50
+python3 pgvector/benchmark_pgvector.py --metric cosine --where-sql "genre = :g" --where-param g=Sports
+```
+
+qdrant:
+
+```bash
+python3 qdrant/benchmark_qdrant.py
+python3 qdrant/benchmark_qdrant.py --k-values 1,5,10 --num-queries 500
+python3 qdrant/benchmark_qdrant.py --hnsw-ef 32,64,128,256
+python3 qdrant/benchmark_qdrant.py --exact-qdrant
+```
+
+weaviate (`--distance` added):
+
+```bash
+python3 weaviate/benchmark_weaviate.py
+python3 weaviate/benchmark_weaviate.py --distance cosine --k-values 1,5,10 --num-queries 500
+python3 weaviate/benchmark_weaviate.py --distance dot --hnsw-ef 32,64,128
+python3 weaviate/benchmark_weaviate.py --distance l2 --exact-weaviate
+```
+
+## Environment Variables
+
+pgvector scripts:
+- `DATABASE_URL` (default: `postgresql+psycopg2://postgres:postgres@localhost:5432/appdb`)
+- Benchmark-only: `TABLE_NAME`, `ID_COLUMN`, `EMBEDDING_COLUMN`, `GENRE_COLUMN`
+
+qdrant benchmark:
+- `QDRANT_URL` (default: `http://localhost:6333`)
+- `COLLECTION_NAME` (default: `news_articles`)
+
+weaviate scripts:
+- `WEAVIATE_HTTP_HOST` (default: `localhost`)
+- `WEAVIATE_HTTP_PORT` (default: `8080`)
+- `WEAVIATE_GRPC_HOST` (default: `localhost`)
+- `WEAVIATE_GRPC_PORT` (default: `50051`)
+- `WEAVIATE_SECURE` (default: `false`)
+- `WEAVIATE_COLLECTION` (default: `NewsArticle`)
+- `WEAVIATE_SOURCE_ID_PROPERTY` (benchmark default: `sourceRowId`)
+
+shared model override:
+- `EMBEDDING_MODEL` (default: `intfloat/e5-large-v2`)
+
+## Notes
+
+- Keep ingest and benchmark model consistent.
+- For Weaviate, use the same `--distance` during ingest and benchmark for aligned recall comparisons.
+- `weaviate/benchmark_weaviate.py --distance` overrides inferred collection distance; omit it to auto-detect.
