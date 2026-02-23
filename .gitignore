@@ -8,20 +8,27 @@ __pycache__/
 *.pyd
 *.so
 .Python
+.python-version
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.pyre/
+.tox/
+.nox/
 .coverage
 .coverage.*
 htmlcov/
 dist/
 build/
 *.egg-info/
+pip-wheel-metadata/
 
 # Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
 # Environment / secrets
 .env
@@ -30,9 +37,20 @@ env/
 # IDE / Editor
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Logs and temp files
 *.log
 *.tmp
 tmp/
+temp/
 
+# Jupyter
+.ipynb_checkpoints/
+
+# Local service/runtime state
+volumes/
+
+# Local benchmark outputs
+*.csv.tmp
