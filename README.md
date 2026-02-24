@@ -25,23 +25,72 @@ pip3 install -r requirements.txt
 
 ## Quick Start (Unified Runner)
 
-Use `run_benchmarks.py` to orchestrate docker / insert / benchmark steps across one or more backends.
+Use `run_benchmarks.py` to orchestrate docker / insert / recall benchmark / QPS steps across one or more backends.
 
 ```bash
-python3 run_benchmarks.py -dbname all --docker --insert --benchmark
+python3 run_benchmarks.py -dbname all --docker --insert --recall --qps
 ```
 
-Common examples:
+## CLI Parameters (Complete Reference)
+
+- `-dbname, --dbname` (required): target backends. Use comma-separated names (`pgvector,qdrant`) or `all`.
+- `--docker`: start backend containers using each backend's compose file. `faiss` is automatically skipped as local-only.
+- `--insert`: run backend insert scripts. If enabled, shared embeddings are precomputed once before the first backend insert unless disabled.
+- `--recall`: run recall/latency benchmark scripts (`benchmark-*.py`).
+- `--qps`: run throughput benchmark scripts (`benchmark-qps-*.py`).
+- `--insert-args "..."`: pass-through args only for insert scripts.
+- `--recall-args "..."`: pass-through args only for recall scripts.
+- `--qps-args "..."`: pass-through args only for QPS scripts.
+
+Parameter defaults and behavior:
+
+- At least one action flag is required: `--docker`, `--insert`, `--recall`, or `--qps`.
+- `--dbname all` expands to: `pgvector,chroma,qdrant,weaviate,milvus,faiss`.
+- `--distance cosine` is auto-added to insert/recall/qps arg groups if missing.
+- `--num-queries 480` is auto-added to recall args if missing.
+- `--insert` precompute step is skipped when `--insert-args` includes `--no-embedding-cache`.
+- Invalid quoted arg strings (for example unmatched quotes) in `--insert-args`, `--recall-args`, or `--qps-args` will stop execution with a parser error.
+
+## Action Combinations (All Valid Non-Empty Sets)
+
+Template:
 
 ```bash
-# Start containers + benchmark all backends
-python3 run_benchmarks.py -dbname all --docker --benchmark
+python3 run_benchmarks.py -dbname <db|db1,db2|all> <action flags>
+```
 
+Every possible action combination:
+
+```bash
+# 1 action
+python3 run_benchmarks.py -dbname all --docker
+python3 run_benchmarks.py -dbname all --insert
+python3 run_benchmarks.py -dbname all --recall
+python3 run_benchmarks.py -dbname all --qps
+
+# 2 actions
+python3 run_benchmarks.py -dbname all --docker --insert
+python3 run_benchmarks.py -dbname all --docker --recall
+python3 run_benchmarks.py -dbname all --docker --qps
+python3 run_benchmarks.py -dbname all --insert --recall
+python3 run_benchmarks.py -dbname all --insert --qps
+python3 run_benchmarks.py -dbname all --recall --qps
+
+# 3 actions
+python3 run_benchmarks.py -dbname all --docker --insert --recall
+python3 run_benchmarks.py -dbname all --docker --insert --qps
+python3 run_benchmarks.py -dbname all --docker --recall --qps
+python3 run_benchmarks.py -dbname all --insert --recall --qps
+
+# 4 actions
+python3 run_benchmarks.py -dbname all --docker --insert --recall --qps
+```
+
+Recommended practical examples:
+
+```bash
 # Insert only for pgvector and qdrant
 python3 run_benchmarks.py -dbname pgvector,qdrant --insert
-
-# Insert all backends (shared embeddings precomputed once, then reused)
-python3 run_benchmarks.py -dbname all --insert
 
 # Force rebuild of shared embedding cache before insert
 python3 run_benchmarks.py -dbname all --insert --insert-args "--force-rebuild-embeddings"
@@ -52,16 +101,19 @@ python3 run_benchmarks.py -dbname all --insert --insert-args "--cache-dir .cache
 # Disable shared cache and fall back to per-script embedding
 python3 run_benchmarks.py -dbname all --insert --insert-args "--no-embedding-cache"
 
-# Benchmark only faiss
-python3 run_benchmarks.py -dbname faiss --benchmark
+# Recall benchmark only faiss
+python3 run_benchmarks.py -dbname faiss --recall
 
-# Forward extra args to benchmark scripts
-python3 run_benchmarks.py -dbname all --benchmark --benchmark-args "--k-values 1,5,10 --num-queries 300"
+# Forward extra args to recall benchmark scripts
+python3 run_benchmarks.py -dbname all --recall --recall-args "--k-values 1,5,10 --num-queries 300"
+
+# Forward extra args to QPS scripts
+python3 run_benchmarks.py -dbname qdrant --qps --qps-args "--k 10 --seconds 20 --concurrency 8"
 ```
 
-## QPS Benchmarks (Standalone Scripts)
+## QPS Benchmarks
 
-QPS scripts are run per backend (not via `run_benchmarks.py`).
+QPS scripts can be run via `run_benchmarks.py --qps` or standalone per backend.
 
 Common example pattern:
 
@@ -79,16 +131,6 @@ python3 weaviate/benchmark-qps-weaviate.py --distance cosine --k 10 --seconds 20
 python3 milvus/benchmark-qps-milvus.py --distance cosine --k 10 --seconds 20 --concurrency 8
 python3 faiss/benchmark-qps-faiss.py --distance cosine --k 10 --seconds 20 --concurrency 8
 ```
-
-### Unified Runner Flags
-
-- `-dbname, --dbname` required; comma-separated backend names or `all`
-- `--docker` start backend containers (`faiss` is skipped as local backend)
-- `--insert` run insert scripts
-- `--benchmark` run benchmark scripts
-- `--insert-args "..."` pass-through args for insert scripts (supports `--cache-dir`, `--force-rebuild-embeddings`, `--no-embedding-cache`)
-- `--benchmark-args "..."` pass-through args for benchmark scripts
-- When `--insert` is used, `run_benchmarks.py` precomputes shared embeddings once before per-backend inserts unless `--no-embedding-cache` is passed.
 
 ## Benchmark Output Format
 
@@ -140,8 +182,8 @@ After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated fi
 - `Run`
 - `Distance`
 - `Queries`
-- `Recall@1`, `Recall@5`, `Recall@10`
-- `Lat avg (ms)`, `Lat p50 (ms)`, `Lat p95 (ms)`
+- If recall benchmarks ran: `Recall@1`, `Recall@5`, `Recall@10`, `Lat avg (ms)`, `Lat p50 (ms)`, `Lat p95 (ms)`
+- If QPS benchmarks ran: `QPS`, `Lat-QPS avg (ms)`, `Lat-QPS p50 (ms)`, `Lat-QPS p95 (ms)`, `Lat-QPS p99 (ms)`
 
 `run_benchmarks.py` also prints a consolidated insert table:
 
@@ -192,13 +234,13 @@ After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated fi
 
 ## Backend Notes
 
-- `run_benchmarks.py` defaults to `--distance cosine` for insert and benchmark if you do not pass `--distance`.
-- `run_benchmarks.py` defaults benchmark scripts to `--num-queries 480` if you do not pass `--num-queries`.
+- `run_benchmarks.py` defaults to `--distance cosine` for insert and recall benchmark if you do not pass `--distance`.
+- `run_benchmarks.py` defaults recall benchmark scripts to `--num-queries 480` if you do not pass `--num-queries`.
 - Benchmarks default `--warmup-queries` to `0`, so measured queries match requested queries by default.
 - Shared embedding cache uses `NPZ + JSON`.
 - Cache invalidates/rebuilds based on CSV content digest, model name, and embedding text prefix version.
 - The same cached vectors are reused by all insert scripts in a run.
-- Use the same `--distance` family during insert and benchmark for fair comparisons.
+- Use the same `--distance` family during insert and recall/qps benchmarking for fair comparisons.
 - Milvus benchmark now fails fast if requested `--distance` does not match the collection index metric.
 - Weaviate benchmark includes retry-based connection startup handling for container readiness.
 - FAISS runs locally and does not require Docker.

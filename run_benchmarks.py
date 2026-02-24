@@ -20,11 +20,13 @@ DB_ORDER = ["pgvector", "chroma", "qdrant", "weaviate", "milvus", "faiss"]
 class DBConfig:
     insert_script: str
     benchmark_script: str
+    qps_script: str
     docker_compose: str | None
 
 
 @dataclass(frozen=True)
 class BenchmarkRecord:
+    benchmark_type: str
     db_name: str
     run: str
     distance: str
@@ -35,6 +37,11 @@ class BenchmarkRecord:
     latency_avg_ms: str
     latency_p50_ms: str
     latency_p95_ms: str
+    qps: str
+    latency_qps_avg_ms: str
+    latency_qps_p50_ms: str
+    latency_qps_p95_ms: str
+    latency_qps_p99_ms: str
 
 
 @dataclass(frozen=True)
@@ -51,31 +58,37 @@ DB_CONFIG: dict[str, DBConfig] = {
     "pgvector": DBConfig(
         insert_script="pgvector/insert-data-pgvector.py",
         benchmark_script="pgvector/benchmark-pgvector.py",
+        qps_script="pgvector/benchmark-qps-pgvector.py",
         docker_compose="docker-compose-pgvector.yml",
     ),
     "chroma": DBConfig(
         insert_script="chroma/insert-data-chroma.py",
         benchmark_script="chroma/benchmark-chroma.py",
+        qps_script="chroma/benchmark-qps-chroma.py",
         docker_compose="docker-compose-chroma.yml",
     ),
     "qdrant": DBConfig(
         insert_script="qdrant/insert-data-qdrant.py",
         benchmark_script="qdrant/benchmark-qdrant.py",
+        qps_script="qdrant/benchmark-qps-qdrant.py",
         docker_compose="docker-compose-qdrant.yml",
     ),
     "weaviate": DBConfig(
         insert_script="weaviate/insert-data-weaviate.py",
         benchmark_script="weaviate/benchmark-weaviate.py",
+        qps_script="weaviate/benchmark-qps-weaviate.py",
         docker_compose="docker-compose-weviate.yml",
     ),
     "milvus": DBConfig(
         insert_script="milvus/insert-data-milvus.py",
         benchmark_script="milvus/benchmark-milvus.py",
+        qps_script="milvus/benchmark-qps-milvus.py",
         docker_compose="docker-compose-milvus.yml",
     ),
     "faiss": DBConfig(
         insert_script="faiss/insert-data-faiss.py",
         benchmark_script="faiss/benchmark-faiss.py",
+        qps_script="faiss/benchmark-qps-faiss.py",
         docker_compose=None,
     ),
 }
@@ -83,11 +96,12 @@ DB_CONFIG: dict[str, DBConfig] = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run docker, insert, and benchmark across one or more vector DB backends."
+        description="Run docker, insert, recall benchmark, and QPS workflows across one or more vector DB backends."
     )
     parser.add_argument("-dbname", "--dbname", required=True, help="DB name(s): qdrant,pgvector or all")
     parser.add_argument("--insert", action="store_true", help="Run insert script(s)")
-    parser.add_argument("--benchmark", action="store_true", help="Run benchmark script(s)")
+    parser.add_argument("--recall", action="store_true", help="Run recall benchmark script(s)")
+    parser.add_argument("--qps", action="store_true", help="Run QPS benchmark script(s)")
     parser.add_argument("--docker", action="store_true", help="Start DB container(s) with docker compose")
     parser.add_argument(
         "--insert-args",
@@ -95,9 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
         help='Extra args forwarded only to insert scripts. Example: "--distance cosine --batch-size 128"',
     )
     parser.add_argument(
-        "--benchmark-args",
+        "--recall-args",
         default="",
-        help='Extra args forwarded only to benchmark scripts. Example: "--k-values 1,5 --num-queries 100"',
+        help='Extra args forwarded only to recall benchmark scripts. Example: "--k-values 1,5 --num-queries 100"',
+    )
+    parser.add_argument(
+        "--qps-args",
+        default="",
+        help='Extra args forwarded only to QPS benchmark scripts. Example: "--k 10 --seconds 20 --concurrency 8"',
     )
     return parser
 
@@ -224,10 +243,12 @@ def parse_benchmark_records(db_name: str, output: str) -> list[BenchmarkRecord]:
         run = ""
         distance = ""
         measured_queries = ""
+        qps = ""
         recall_map: dict[str, str] = {}
         latency_avg_ms = ""
         latency_p50_ms = ""
         latency_p95_ms = ""
+        latency_p99_ms = ""
 
         j = i + 1
         while j < len(lines):
@@ -240,6 +261,8 @@ def parse_benchmark_records(db_name: str, output: str) -> list[BenchmarkRecord]:
                 distance = s.split(":", 1)[1].strip()
             elif s.startswith("Measured queries: "):
                 measured_queries = s.split(":", 1)[1].strip()
+            elif s.startswith("QPS: "):
+                qps = s.split(":", 1)[1].strip()
             elif s.startswith("Recall@"):
                 m = _RECALL_RE.match(s)
                 if m:
@@ -250,21 +273,30 @@ def parse_benchmark_records(db_name: str, output: str) -> list[BenchmarkRecord]:
                 latency_p50_ms = s.split(":", 1)[1].replace("ms", "").strip()
             elif s.startswith("Latency p95: "):
                 latency_p95_ms = s.split(":", 1)[1].replace("ms", "").strip()
+            elif s.startswith("Latency p99: "):
+                latency_p99_ms = s.split(":", 1)[1].replace("ms", "").strip()
             j += 1
 
         if run:
+            is_qps_run = bool(qps)
             records.append(
                 BenchmarkRecord(
+                    benchmark_type="qps" if is_qps_run else "recall",
                     db_name=db_name,
                     run=run,
                     distance=distance or "-",
                     measured_queries=measured_queries or "-",
-                    recall_at_1=recall_map.get("1", "-"),
-                    recall_at_5=recall_map.get("5", "-"),
-                    recall_at_10=recall_map.get("10", "-"),
-                    latency_avg_ms=latency_avg_ms or "-",
-                    latency_p50_ms=latency_p50_ms or "-",
-                    latency_p95_ms=latency_p95_ms or "-",
+                    recall_at_1=recall_map.get("1", "-") if not is_qps_run else "-",
+                    recall_at_5=recall_map.get("5", "-") if not is_qps_run else "-",
+                    recall_at_10=recall_map.get("10", "-") if not is_qps_run else "-",
+                    latency_avg_ms=(latency_avg_ms or "-") if not is_qps_run else "-",
+                    latency_p50_ms=(latency_p50_ms or "-") if not is_qps_run else "-",
+                    latency_p95_ms=(latency_p95_ms or "-") if not is_qps_run else "-",
+                    qps=qps or "-",
+                    latency_qps_avg_ms=(latency_avg_ms or "-") if is_qps_run else "-",
+                    latency_qps_p50_ms=(latency_p50_ms or "-") if is_qps_run else "-",
+                    latency_qps_p95_ms=(latency_p95_ms or "-") if is_qps_run else "-",
+                    latency_qps_p99_ms=(latency_p99_ms or "-") if is_qps_run else "-",
                 )
             )
 
@@ -362,33 +394,67 @@ def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
     if not records:
         return
 
-    headers = [
+    has_recall = any(r.benchmark_type == "recall" for r in records)
+    has_qps = any(r.benchmark_type == "qps" for r in records)
+
+    headers: list[str] = [
         "DB",
         "Run",
         "Distance",
         "Queries",
-        "Recall@1",
-        "Recall@5",
-        "Recall@10",
-        "Lat avg (ms)",
-        "Lat p50 (ms)",
-        "Lat p95 (ms)",
     ]
-    rows = [
-        [
+    if has_recall:
+        headers.extend(
+            [
+                "Recall@1",
+                "Recall@5",
+                "Recall@10",
+                "Lat avg (ms)",
+                "Lat p50 (ms)",
+                "Lat p95 (ms)",
+            ]
+        )
+    if has_qps:
+        headers.extend(
+            [
+                "QPS",
+                "Lat-QPS avg (ms)",
+                "Lat-QPS p50 (ms)",
+                "Lat-QPS p95 (ms)",
+                "Lat-QPS p99 (ms)",
+            ]
+        )
+
+    rows: list[list[str]] = []
+    for r in records:
+        row = [
             r.db_name,
             r.run,
             r.distance,
             r.measured_queries,
-            r.recall_at_1,
-            r.recall_at_5,
-            r.recall_at_10,
-            r.latency_avg_ms,
-            r.latency_p50_ms,
-            r.latency_p95_ms,
         ]
-        for r in records
-    ]
+        if has_recall:
+            row.extend(
+                [
+                    r.recall_at_1,
+                    r.recall_at_5,
+                    r.recall_at_10,
+                    r.latency_avg_ms,
+                    r.latency_p50_ms,
+                    r.latency_p95_ms,
+                ]
+            )
+        if has_qps:
+            row.extend(
+                [
+                    r.qps,
+                    r.latency_qps_avg_ms,
+                    r.latency_qps_p50_ms,
+                    r.latency_qps_p95_ms,
+                    r.latency_qps_p99_ms,
+                ]
+            )
+        rows.append(row)
 
     widths = [len(h) for h in headers]
     for row in rows:
@@ -411,8 +477,8 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if not (args.docker or args.insert or args.benchmark):
-        parser.error("At least one action flag is required: --docker and/or --insert and/or --benchmark")
+    if not (args.docker or args.insert or args.recall or args.qps):
+        parser.error("At least one action flag is required: --docker and/or --insert and/or --recall and/or --qps")
 
     try:
         selected_dbs = parse_db_selection(args.dbname)
@@ -425,24 +491,32 @@ def main() -> int:
         parser.error(f"Invalid --insert-args value: {err}")
 
     try:
-        benchmark_args = shlex.split(args.benchmark_args)
+        recall_args = shlex.split(args.recall_args)
     except ValueError as err:
-        parser.error(f"Invalid --benchmark-args value: {err}")
+        parser.error(f"Invalid --recall-args value: {err}")
+    try:
+        qps_args = shlex.split(args.qps_args)
+    except ValueError as err:
+        parser.error(f"Invalid --qps-args value: {err}")
 
     if not has_cli_flag(insert_args, "--distance"):
         insert_args.extend(["--distance", "cosine"])
-    if not has_cli_flag(benchmark_args, "--distance"):
-        benchmark_args.extend(["--distance", "cosine"])
-    if not has_cli_flag(benchmark_args, "--num-queries"):
-        benchmark_args.extend(["--num-queries", "480"])
+    if not has_cli_flag(recall_args, "--distance"):
+        recall_args.extend(["--distance", "cosine"])
+    if not has_cli_flag(recall_args, "--num-queries"):
+        recall_args.extend(["--num-queries", "480"])
+    if not has_cli_flag(qps_args, "--distance"):
+        qps_args.extend(["--distance", "cosine"])
 
     actions: list[str] = []
     if args.docker:
         actions.append("docker")
     if args.insert:
         actions.append("insert")
-    if args.benchmark:
-        actions.append("benchmark")
+    if args.recall:
+        actions.append("recall")
+    if args.qps:
+        actions.append("qps")
 
     print("Selected DBs:", ", ".join(selected_dbs))
     print("Selected actions:", ", ".join(actions))
@@ -486,10 +560,19 @@ def main() -> int:
             if not ok:
                 any_failed = True
 
-        if args.benchmark:
-            cmd = [sys.executable, cfg.benchmark_script, *benchmark_args]
-            ok, status, output = run_step(db_name, "benchmark", cmd, capture_output=True)
-            summary.append((db_name, "benchmark", status))
+        if args.recall:
+            cmd = [sys.executable, cfg.benchmark_script, *recall_args]
+            ok, status, output = run_step(db_name, "recall", cmd, capture_output=True)
+            summary.append((db_name, "recall", status))
+            if output:
+                benchmark_records.extend(parse_benchmark_records(db_name, output))
+            if not ok:
+                any_failed = True
+
+        if args.qps:
+            cmd = [sys.executable, cfg.qps_script, *qps_args]
+            ok, status, output = run_step(db_name, "qps", cmd, capture_output=True)
+            summary.append((db_name, "qps", status))
             if output:
                 benchmark_records.extend(parse_benchmark_records(db_name, output))
             if not ok:
