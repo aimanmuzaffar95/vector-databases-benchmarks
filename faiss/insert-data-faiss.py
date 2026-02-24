@@ -2,40 +2,34 @@
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
 import faiss
 import numpy as np
-import pandas as pd
-from sentence_transformers import SentenceTransformer
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from shared.embedding_cache import compute_without_cache, load_or_create_cache
 
 CSV_PATH_DEFAULT = "train.csv"
 DEFAULT_MODEL_NAME = "intfloat/e5-large-v2"
 EXPECTED_DIM = 1024
-
-LABEL_MAP = {
-    1: "World",
-    2: "Sports",
-    3: "Business",
-    4: "Sci/Tech",
-}
+CACHE_DIR_DEFAULT = os.getenv("EMBEDDING_CACHE_DIR", ".cache/embeddings")
 
 
 def bytes_to_mb(b: int) -> float:
     return b / (1024 * 1024)
 
 
-def build_passage_text(title: str, description: str) -> str:
-    combined = f"{str(title).strip()} {str(description).strip()}".strip()
-    return f"passage: {combined}"
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build a local FAISS index from train.csv embeddings")
     p.add_argument("--csv-path", default=os.getenv("CSV_PATH", CSV_PATH_DEFAULT))
     p.add_argument("--model", default=os.getenv("EMBEDDING_MODEL", DEFAULT_MODEL_NAME))
+    p.add_argument("--cache-dir", default=CACHE_DIR_DEFAULT)
+    p.add_argument("--force-rebuild-embeddings", action="store_true")
+    p.add_argument("--no-embedding-cache", action="store_true")
     p.add_argument(
         "--distance",
         default=os.getenv("FAISS_DISTANCE", "cosine"),
@@ -56,11 +50,7 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("FAISS_OUTPUT_DIR", "faiss/artifacts"),
         help="Directory where index + vectors + metadata are saved",
     )
-    p.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite existing output files in output-dir",
-    )
+    p.add_argument("--overwrite", action="store_true", help="Overwrite existing output files in output-dir")
     return p.parse_args()
 
 
@@ -102,9 +92,6 @@ def main() -> None:
     print("Index type:", index_type)
     print("Output dir:", output_dir)
 
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"Local dataset not found: {csv_path}")
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
     index_path = output_dir / "index.faiss"
@@ -120,50 +107,24 @@ def main() -> None:
                 + ", ".join(str(p) for p in existing)
             )
 
-    csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-    df = pd.read_csv(csv_path)
-
-    expected_columns = {"Class Index", "Title", "Description"}
-    received_columns = set(df.columns)
-    if not expected_columns.issubset(received_columns):
-        raise ValueError(f"Missing column(s). Expected: {expected_columns}, Found: {received_columns}")
-
-    df = df.rename(columns={
-        "Class Index": "label",
-        "Title": "title",
-        "Description": "description",
-    })
-    df["label"] = df["label"].map(LABEL_MAP).fillna("Unknown")
-    df["title"] = df["title"].fillna("")
-    df["description"] = df["description"].fillna("")
-
-    records_count = len(df)
-    print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-
-    print("Loading sentence-transformers model...")
-    model = SentenceTransformer(model_name)
-    dim = model.get_sentence_embedding_dimension()
-    print("Detected embedding dim:", dim)
-
-    if dim != EXPECTED_DIM:
-        raise RuntimeError(
-            f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
-            "Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
+    if args.no_embedding_cache:
+        bundle = compute_without_cache(csv_path=csv_path, model_name=model_name, expected_dim=EXPECTED_DIM)
+    else:
+        bundle = load_or_create_cache(
+            csv_path=csv_path,
+            model_name=model_name,
+            expected_dim=EXPECTED_DIM,
+            cache_dir=args.cache_dir,
+            cache_key_suffix="shared",
+            force_rebuild=bool(args.force_rebuild_embeddings),
         )
 
-    texts = [build_passage_text(t, d) for t, d in zip(df["title"], df["description"])]
+    vectors = np.asarray(bundle.vectors, dtype=np.float32)
+    records_count = vectors.shape[0]
 
-    print("Encoding embeddings...")
-    t_emb0 = time.perf_counter()
-    vectors = model.encode(
-        texts,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=False,
-    )
-    vectors = np.asarray(vectors, dtype=np.float32)
-    t_emb1 = time.perf_counter()
-    embed_seconds = t_emb1 - t_emb0
+    print(f"Using local dataset: {csv_path}")
+    print(f"Records: {records_count} | CSV size: {bundle.csv_size_mb:.2f} MB")
+    print(f"Embedding source: {bundle.source}")
 
     if vectors.ndim != 2 or vectors.shape[1] != EXPECTED_DIM:
         raise RuntimeError(f"Unexpected embedding shape: {vectors.shape}")
@@ -175,8 +136,13 @@ def main() -> None:
         faiss.normalize_L2(vectors)
 
     ids = np.arange(records_count, dtype=np.int64)
-
-    index = build_index(dim=EXPECTED_DIM, index_type=index_type, metric_type=metric_type, ivf_nlist=args.ivf_nlist, hnsw_m=args.hnsw_m)
+    index = build_index(
+        dim=EXPECTED_DIM,
+        index_type=index_type,
+        metric_type=metric_type,
+        ivf_nlist=args.ivf_nlist,
+        hnsw_m=args.hnsw_m,
+    )
     base = unwrap_index(index)
 
     print("Building FAISS index...")
@@ -190,8 +156,7 @@ def main() -> None:
         end = min(start + batch_size, records_count)
         index.add_with_ids(vectors[start:end], ids[start:end])
 
-    t_idx1 = time.perf_counter()
-    index_seconds = t_idx1 - t_idx0
+    index_seconds = time.perf_counter() - t_idx0
 
     faiss.write_index(index, str(index_path))
     np.save(vectors_path, vectors)
@@ -208,6 +173,8 @@ def main() -> None:
         "hnsw_m": int(args.hnsw_m),
         "normalized": bool(distance == "cosine"),
         "created_unix": time.time(),
+        "embedding_source": bundle.source,
+        "embedding_seconds": float(bundle.embed_seconds),
     }
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -215,9 +182,10 @@ def main() -> None:
 
     print("\n==== SUMMARY ====")
     print(f"Rows indexed               : {index.ntotal}")
-    print(f"CSV size (MB)              : {csv_size_mb:.2f}")
+    print(f"CSV size (MB)              : {bundle.csv_size_mb:.2f}")
     print(f"Approx embedding data (MB) : {approx_vec_mb:.2f} (float32 vectors only)")
-    print(f"Embedding time (s)         : {embed_seconds:.3f}")
+    print(f"Embedding source           : {bundle.source}")
+    print(f"Embedding time (s)         : {bundle.embed_seconds:.3f}")
     print(f"FAISS build/add time (s)   : {index_seconds:.3f}")
     print(f"Saved index                : {index_path}")
     print(f"Saved vectors              : {vectors_path}")

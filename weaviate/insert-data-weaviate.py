@@ -1,43 +1,31 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import sys
 import time
-from typing import Iterable
-
-import pandas as pd
-from sentence_transformers import SentenceTransformer
+from pathlib import Path
 
 import weaviate
-from weaviate.classes.config import Configure, Property, DataType, VectorDistances
+from weaviate.classes.config import Configure, DataType, Property, VectorDistances
 from weaviate.classes.data import DataObject
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from shared.embedding_cache import compute_without_cache, load_or_create_cache
 
 CSV_PATH_DEFAULT = os.getenv("CSV_PATH", "train.csv")
-
-LABEL_MAP = {
-    1: "World",
-    2: "Sports",
-    3: "Business",
-    4: "Sci/Tech",
-}
-
-# Weaviate connection (matches your docker-compose)
 WEAVIATE_HTTP_HOST = os.getenv("WEAVIATE_HTTP_HOST", "localhost")
 WEAVIATE_HTTP_PORT = int(os.getenv("WEAVIATE_HTTP_PORT", "8080"))
 WEAVIATE_GRPC_HOST = os.getenv("WEAVIATE_GRPC_HOST", "localhost")
 WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", "50051"))
 WEAVIATE_SECURE = os.getenv("WEAVIATE_SECURE", "false").lower() == "true"
-
-# Weaviate collection/class name (PascalCase is conventional)
 COLLECTION_NAME_DEFAULT = os.getenv("COLLECTION_NAME", os.getenv("WEAVIATE_COLLECTION", "NewsArticle"))
-
-# Pick a 1024-d model
 MODEL_NAME_DEFAULT = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
 EXPECTED_DIM = 1024
 BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "128"))
 POLL_INTERVAL_SEC = 0.5
-MAX_WAIT_SEC = 60 * 10  # 10 minutes safety cap
-
+MAX_WAIT_SEC = 60 * 10
+CACHE_DIR_DEFAULT = os.getenv("EMBEDDING_CACHE_DIR", ".cache/embeddings")
 
 DISTANCE_MAP = {
     "cosine": VectorDistances.COSINE,
@@ -50,21 +38,13 @@ def bytes_to_mb(b: int) -> float:
     return b / (1024 * 1024)
 
 
-def build_passage_text(title: str, description: str) -> str:
-    combined = f"{title.strip()} {description.strip()}".strip()
-    return f"passage: {combined}"
-
-
 def chunk_ranges(total: int, batch: int):
     for i in range(0, total, batch):
         yield i, min(i + batch, total)
 
 
 def connect_weaviate() -> weaviate.WeaviateClient:
-    """
-    Connect to local/self-hosted Weaviate using your docker-compose ports.
-    """
-    client = weaviate.connect_to_custom(
+    return weaviate.connect_to_custom(
         http_host=WEAVIATE_HTTP_HOST,
         http_port=WEAVIATE_HTTP_PORT,
         http_secure=WEAVIATE_SECURE,
@@ -72,13 +52,9 @@ def connect_weaviate() -> weaviate.WeaviateClient:
         grpc_port=WEAVIATE_GRPC_PORT,
         grpc_secure=WEAVIATE_SECURE,
     )
-    return client
 
 
 def wait_until_ready(client: weaviate.WeaviateClient, timeout_sec: int = 60) -> None:
-    """
-    Basic readiness check.
-    """
     deadline = time.time() + timeout_sec
     while True:
         try:
@@ -86,47 +62,33 @@ def wait_until_ready(client: weaviate.WeaviateClient, timeout_sec: int = 60) -> 
                 return
         except Exception:
             pass
-
         if time.time() > deadline:
             raise TimeoutError("Timed out waiting for Weaviate to become ready.")
         time.sleep(0.2)
 
 
 def recreate_collection(client: weaviate.WeaviateClient, collection_name: str, distance: str) -> None:
-    """
-    Delete existing collection and create a fresh one.
-    We disable server-side vectorization because you are providing vectors manually.
-    """
-    # Delete if exists
     if client.collections.exists(collection_name):
         client.collections.delete(collection_name)
 
-    # Create collection with HNSW vector index (default in Weaviate, but made explicit)
     client.collections.create(
         name=collection_name,
         description="News articles with externally generated sentence embeddings (E5).",
         vector_config=Configure.Vectors.self_provided(
-            vector_index_config=Configure.VectorIndex.hnsw(
-                distance_metric=DISTANCE_MAP[distance]
-            )
+            vector_index_config=Configure.VectorIndex.hnsw(distance_metric=DISTANCE_MAP[distance])
         ),
         properties=[
             Property(name="title", data_type=DataType.TEXT),
             Property(name="description", data_type=DataType.TEXT),
             Property(name="genre", data_type=DataType.TEXT),
-            Property(name="sourceRowId", data_type=DataType.INT),  # helpful for debugging/benchmarking
+            Property(name="sourceRowId", data_type=DataType.INT),
         ],
     )
 
 
 def wait_until_count(client: weaviate.WeaviateClient, collection_name: str, expected_count: int) -> float:
-    """
-    Polls aggregate total_count until it matches expected_count.
-    Returns elapsed seconds from start of polling.
-    """
     start = time.perf_counter()
     deadline = start + MAX_WAIT_SEC
-
     collection = client.collections.get(collection_name)
 
     while True:
@@ -136,13 +98,11 @@ def wait_until_count(client: weaviate.WeaviateClient, collection_name: str, expe
             if total_count >= expected_count:
                 return time.perf_counter() - start
         except Exception:
-            # transient during heavy ingest/startup
             pass
 
         if time.perf_counter() > deadline:
             raise TimeoutError(
-                f"Timed out waiting for object count to reach {expected_count} "
-                f"in collection {collection_name!r}."
+                f"Timed out waiting for object count to reach {expected_count} in collection {collection_name!r}."
             )
         time.sleep(POLL_INTERVAL_SEC)
 
@@ -153,6 +113,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=MODEL_NAME_DEFAULT)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE_DEFAULT)
     parser.add_argument("--collection", default=COLLECTION_NAME_DEFAULT)
+    parser.add_argument("--cache-dir", default=CACHE_DIR_DEFAULT)
+    parser.add_argument("--force-rebuild-embeddings", action="store_true")
+    parser.add_argument("--no-embedding-cache", action="store_true")
     parser.add_argument(
         "--distance",
         choices=sorted(DISTANCE_MAP.keys()),
@@ -175,61 +138,28 @@ def main():
     print("Model:", model_name)
     print("Distance metric:", args.distance)
 
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"Local dataset not found: {csv_path}")
-    print(f"Using local dataset: {csv_path}")
-
-    csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-    df = pd.read_csv(csv_path)
-    expected_columns = {"Class Index", "Title", "Description"}
-    received_columns = set(df.columns)
-    if not expected_columns.issubset(received_columns):
-        raise ValueError(f"Missing column(s). Expected: {expected_columns}, Found: {received_columns}")
-
-    df = df.rename(columns={
-        "Class Index": "label",
-        "Title": "title",
-        "Description": "description",
-    })
-
-    # Normalize fields
-    df["label"] = df["label"].map(LABEL_MAP).fillna("Unknown")
-    df["title"] = df["title"].fillna("")
-    df["description"] = df["description"].fillna("")
-
-    records_count = len(df)
-    print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-    print("Loading sentence-transformers model...")
-    model = SentenceTransformer(model_name)
-
-    dim = model.get_sentence_embedding_dimension()
-    print("Detected embedding dim:", dim)
-
-    if dim != EXPECTED_DIM:
-        raise RuntimeError(
-            f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
-            f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
+    if args.no_embedding_cache:
+        bundle = compute_without_cache(csv_path=csv_path, model_name=model_name, expected_dim=EXPECTED_DIM)
+    else:
+        bundle = load_or_create_cache(
+            csv_path=csv_path,
+            model_name=model_name,
+            expected_dim=EXPECTED_DIM,
+            cache_dir=args.cache_dir,
+            cache_key_suffix="shared",
+            force_rebuild=bool(args.force_rebuild_embeddings),
         )
-    texts = [
-        build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
-        for i in range(records_count)
-    ]
 
-    print("Encoding embeddings...")
-    t_emb0 = time.perf_counter()
-    embeddings = model.encode(
-        texts,
-        show_progress_bar=True,
-        # normalize_embeddings=True,  # optional; keep consistent with your other DB tests
-    )
-    t_emb1 = time.perf_counter()
-    embed_seconds = t_emb1 - t_emb0
+    records_count = bundle.vectors.shape[0]
+    print(f"Using local dataset: {csv_path}")
+    print(f"Records: {records_count} | CSV size: {bundle.csv_size_mb:.2f} MB")
+    print(f"Embedding source: {bundle.source}")
 
-    emb_lists = [e.tolist() for e in embeddings]
+    emb_lists = [e.tolist() for e in bundle.vectors]
     client = connect_weaviate()
+
     try:
         wait_until_ready(client)
-
         print("Recreating Weaviate collection...")
         recreate_collection(client, collection_name, args.distance)
 
@@ -240,42 +170,33 @@ def main():
         for start, end in chunk_ranges(records_count, batch_size):
             batch_objects = []
             for i in range(start, end):
-                # We store sourceRowId so you can later trace back to CSV row if needed
                 props = {
-                    "title": df.iloc[i]["title"],
-                    "description": df.iloc[i]["description"],
-                    "genre": df.iloc[i]["label"],
+                    "title": bundle.titles[i],
+                    "description": bundle.descriptions[i],
+                    "genre": bundle.labels[i],
                     "sourceRowId": int(i),
                 }
-
-                batch_objects.append(
-                    DataObject(
-                        properties=props,
-                        vector=emb_lists[i],
-                    )
-                )
+                batch_objects.append(DataObject(properties=props, vector=emb_lists[i]))
 
             collection.data.insert_many(batch_objects)
 
-        t_write1 = time.perf_counter()
-        write_seconds = t_write1 - t_write0
-        # Weaviate maintains HNSW as data is ingested, so there is no separate CREATE INDEX step like PGVector.
-        # We measure "post-insert visibility/settling" until expected object count is visible.
+        write_seconds = time.perf_counter() - t_write0
         print("Waiting for Weaviate object count to reach expected size...")
         index_seconds = wait_until_count(client, collection_name, records_count)
+
         agg = collection.aggregate.over_all(total_count=True)
         db_count = int(agg.total_count or 0)
         approx_vec_mb = bytes_to_mb(db_count * EXPECTED_DIM * 4)
 
         print("\n==== SUMMARY ====")
         print(f"Rows inserted              : {db_count}")
-        print(f"CSV size (MB)              : {csv_size_mb:.2f}")
+        print(f"CSV size (MB)              : {bundle.csv_size_mb:.2f}")
         print(f"Approx embedding data (MB) : {approx_vec_mb:.2f} (float32 vectors only)")
-        print(f"Embedding time (s)         : {embed_seconds:.3f}")
+        print(f"Embedding source           : {bundle.source}")
+        print(f"Embedding time (s)         : {bundle.embed_seconds:.3f}")
         print(f"DB write time (s)          : {write_seconds:.3f}")
-        print(f'Index build time (s)       : {index_seconds:.3f} (count visibility/settling proxy)')
+        print(f"Index build time (s)       : {index_seconds:.3f} (count visibility/settling proxy)")
         print("=================\n")
-
     finally:
         client.close()
 

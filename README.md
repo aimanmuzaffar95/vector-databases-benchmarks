@@ -38,6 +38,18 @@ python3 run_benchmarks.py -dbname all --docker --benchmark
 # Insert only for pgvector and qdrant
 python3 run_benchmarks.py -dbname pgvector,qdrant --insert
 
+# Insert all backends (shared embeddings precomputed once, then reused)
+python3 run_benchmarks.py -dbname all --insert
+
+# Force rebuild of shared embedding cache before insert
+python3 run_benchmarks.py -dbname all --insert --insert-args "--force-rebuild-embeddings"
+
+# Use a custom embedding cache directory
+python3 run_benchmarks.py -dbname all --insert --insert-args "--cache-dir .cache/embeddings"
+
+# Disable shared cache and fall back to per-script embedding
+python3 run_benchmarks.py -dbname all --insert --insert-args "--no-embedding-cache"
+
 # Benchmark only faiss
 python3 run_benchmarks.py -dbname faiss --benchmark
 
@@ -51,8 +63,9 @@ python3 run_benchmarks.py -dbname all --benchmark --benchmark-args "--k-values 1
 - `--docker` start backend containers (`faiss` is skipped as local backend)
 - `--insert` run insert scripts
 - `--benchmark` run benchmark scripts
-- `--insert-args "..."` pass-through args for insert scripts
+- `--insert-args "..."` pass-through args for insert scripts (supports `--cache-dir`, `--force-rebuild-embeddings`, `--no-embedding-cache`)
 - `--benchmark-args "..."` pass-through args for benchmark scripts
+- When `--insert` is used, `run_benchmarks.py` precomputes shared embeddings once before per-backend inserts unless `--no-embedding-cache` is passed.
 
 ## Benchmark Output Format
 
@@ -85,6 +98,15 @@ After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated fi
 - `Recall@1`, `Recall@5`, `Recall@10`
 - `Lat avg (ms)`, `Lat p50 (ms)`, `Lat p95 (ms)`
 
+`run_benchmarks.py` also prints a consolidated insert table:
+
+- `DB`
+- `Rows`
+- `Embedding Source`
+- `Embedding time (s)`
+- `Write time (s)`
+- `Build time (s)`
+
 ## Script Inventory (Current)
 
 ### Insert scripts
@@ -103,6 +125,10 @@ After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated fi
 - `milvus/benchmark-milvus.py`
 - `faiss/benchmark-faiss.py`
 
+### Shared embedding utilities
+- `shared/embedding_cache.py`
+- `shared/precompute_embeddings.py`
+
 ## Docker Compose Files
 
 - `docker-compose-pgvector.yml`
@@ -116,6 +142,9 @@ After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated fi
 - `run_benchmarks.py` defaults to `--distance cosine` for insert and benchmark if you do not pass `--distance`.
 - `run_benchmarks.py` defaults benchmark scripts to `--num-queries 480` if you do not pass `--num-queries`.
 - Benchmarks default `--warmup-queries` to `0`, so measured queries match requested queries by default.
+- Shared embedding cache uses `NPZ + JSON`.
+- Cache invalidates/rebuilds based on CSV content digest, model name, and embedding text prefix version.
+- The same cached vectors are reused by all insert scripts in a run.
 - Use the same `--distance` family during insert and benchmark for fair comparisons.
 - Milvus benchmark now fails fast if requested `--distance` does not match the collection index metric.
 - Weaviate benchmark includes retry-based connection startup handling for container readiness.

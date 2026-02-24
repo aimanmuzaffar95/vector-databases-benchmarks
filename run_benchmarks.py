@@ -37,6 +37,16 @@ class BenchmarkRecord:
     latency_p95_ms: str
 
 
+@dataclass(frozen=True)
+class InsertRecord:
+    db_name: str
+    rows: str
+    embedding_source: str
+    embedding_time_s: str
+    write_time_s: str
+    build_time_s: str
+
+
 DB_CONFIG: dict[str, DBConfig] = {
     "pgvector": DBConfig(
         insert_script="pgvector/insert-data-pgvector.py",
@@ -129,6 +139,17 @@ def has_cli_flag(args: list[str], flag: str) -> bool:
     return False
 
 
+def get_cli_arg_value(args: list[str], flag: str) -> str | None:
+    for idx, token in enumerate(args):
+        if token == flag:
+            if idx + 1 < len(args):
+                return args[idx + 1]
+            return None
+        if token.startswith(f"{flag}="):
+            return token.split("=", 1)[1]
+    return None
+
+
 def run_step(
     db_name: str,
     step_name: str,
@@ -158,6 +179,34 @@ def run_step(
     status = "OK" if ok else f"FAIL (exit={result.returncode})"
     print(f"[{db_name}] {step_name}: {status}")
     return ok, status, output
+
+
+def ensure_embedding_cache(insert_args: list[str]) -> tuple[bool, str]:
+    if has_cli_flag(insert_args, "--no-embedding-cache"):
+        return True, "SKIPPED (no-embedding-cache)"
+
+    csv_path = get_cli_arg_value(insert_args, "--csv-path") or "train.csv"
+    model = get_cli_arg_value(insert_args, "--model") or "intfloat/e5-large-v2"
+    cache_dir = get_cli_arg_value(insert_args, "--cache-dir") or ".cache/embeddings"
+    force_rebuild = has_cli_flag(insert_args, "--force-rebuild-embeddings")
+
+    cmd = [
+        sys.executable,
+        "shared/precompute_embeddings.py",
+        "--csv-path",
+        csv_path,
+        "--model",
+        model,
+        "--expected-dim",
+        "1024",
+        "--cache-dir",
+        cache_dir,
+    ]
+    if force_rebuild:
+        cmd.append("--force-rebuild")
+
+    ok, status, _ = run_step("shared", "precompute", cmd)
+    return ok, status
 
 
 _RECALL_RE = re.compile(r"^Recall@(\d+):\s*(.+)$")
@@ -222,6 +271,91 @@ def parse_benchmark_records(db_name: str, output: str) -> list[BenchmarkRecord]:
         i = j
 
     return records
+
+
+def _extract_value(line: str) -> str:
+    if ":" not in line:
+        return ""
+    return line.split(":", 1)[1].strip()
+
+
+def parse_insert_record(db_name: str, output: str) -> InsertRecord | None:
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+
+    rows = "-"
+    embedding_source = "-"
+    embedding_time_s = "-"
+    write_time_s = "-"
+    build_time_s = "-"
+
+    for line in lines:
+        if line.startswith("Rows inserted"):
+            rows = _extract_value(line)
+        elif line.startswith("Rows indexed"):
+            rows = _extract_value(line)
+        elif line.startswith("Embedding source"):
+            embedding_source = _extract_value(line)
+        elif line.startswith("Embedding time (s)"):
+            embedding_time_s = _extract_value(line)
+        elif line.startswith("DB write time (s)"):
+            write_time_s = _extract_value(line)
+        elif line.startswith("Index build time (s)"):
+            build_time_s = _extract_value(line)
+        elif line.startswith("FAISS build/add time (s)"):
+            build_time_s = _extract_value(line)
+
+    if rows == "-" and embedding_source == "-" and embedding_time_s == "-":
+        return None
+
+    return InsertRecord(
+        db_name=db_name,
+        rows=rows,
+        embedding_source=embedding_source,
+        embedding_time_s=embedding_time_s,
+        write_time_s=write_time_s,
+        build_time_s=build_time_s,
+    )
+
+
+def print_insert_table(records: list[InsertRecord]) -> None:
+    if not records:
+        return
+
+    headers = [
+        "DB",
+        "Rows",
+        "Embedding Source",
+        "Embedding time (s)",
+        "Write time (s)",
+        "Build time (s)",
+    ]
+    rows = [
+        [
+            r.db_name,
+            r.rows,
+            r.embedding_source,
+            r.embedding_time_s,
+            r.write_time_s,
+            r.build_time_s,
+        ]
+        for r in records
+    ]
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(cell))
+
+    def fmt(row: list[str]) -> str:
+        return " | ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(row))
+
+    sep = "-+-".join("-" * w for w in widths)
+
+    print("\nFinal Insert Table")
+    print(fmt(headers))
+    print(sep)
+    for row in rows:
+        print(fmt(row))
 
 
 def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
@@ -315,11 +449,19 @@ def main() -> int:
     print("")
 
     summary: list[tuple[str, str, str]] = []
+    insert_records: list[InsertRecord] = []
     benchmark_records: list[BenchmarkRecord] = []
     any_failed = False
 
     for db_name in selected_dbs:
         cfg = DB_CONFIG[db_name]
+
+        if args.insert and db_name == selected_dbs[0]:
+            ok, status = ensure_embedding_cache(insert_args)
+            summary.append(("shared", "precompute", status))
+            if not ok:
+                any_failed = True
+                break
 
         if args.docker:
             if cfg.docker_compose is None:
@@ -335,8 +477,12 @@ def main() -> int:
 
         if args.insert:
             cmd = [sys.executable, cfg.insert_script, *insert_args]
-            ok, status, _ = run_step(db_name, "insert", cmd)
+            ok, status, output = run_step(db_name, "insert", cmd, capture_output=True)
             summary.append((db_name, "insert", status))
+            if output:
+                record = parse_insert_record(db_name, output)
+                if record is not None:
+                    insert_records.append(record)
             if not ok:
                 any_failed = True
 
@@ -353,6 +499,7 @@ def main() -> int:
     for db_name, step_name, status in summary:
         print(f"- {db_name:8} | {step_name:9} | {status}")
 
+    print_insert_table(insert_records)
     print_benchmark_table(benchmark_records)
 
     return 1 if any_failed else 0

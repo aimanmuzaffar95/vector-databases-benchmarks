@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   chroma:
     image: ghcr.io/chroma-core/chroma:latest

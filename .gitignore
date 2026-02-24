@@ -58,3 +58,6 @@ volumes/
 # FAISS local artifacts
 faiss/artifacts/
 *.faiss
+
+# Shared embedding cache artifacts
+.cache/embeddings/
