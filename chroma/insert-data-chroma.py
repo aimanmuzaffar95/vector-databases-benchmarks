@@ -3,9 +3,10 @@ import argparse
 import os
 import time
 import pandas as pd
-import sqlalchemy as sa
 
 from sentence_transformers import SentenceTransformer
+
+import chromadb
 
 CSV_PATH_DEFAULT = os.getenv("CSV_PATH", "train.csv")
 
@@ -16,14 +17,21 @@ LABEL_MAP = {
     4: "Sci/Tech",
 }
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/appdb")
+# Chroma config (env-overridable)
+CHROMA_MODE = os.getenv("CHROMA_MODE", "http").strip().lower()  # "http" or "persistent"
+CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
+CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_data")
+
 COLLECTION_NAME_DEFAULT = os.getenv("COLLECTION_NAME", "news_articles")
 
-# Pick a 1024-d model
+# Embeddings
 MODEL_NAME_DEFAULT = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
 EXPECTED_DIM = 1024
-BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "1000"))
-DISTANCE_DEFAULT = os.getenv("PGVECTOR_DISTANCE", "cosine").strip().lower()
+
+# Insert batching (important for large CSVs)
+BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "512"))
+DISTANCE_DEFAULT = os.getenv("CHROMA_DISTANCE", "cosine").strip().lower()
 
 def bytes_to_mb(b: int) -> float:
     return b / (1024 * 1024)
@@ -32,9 +40,15 @@ def build_passage_text(title: str, description: str) -> str:
     combined = f"{title.strip()} {description.strip()}".strip()
     return f"passage: {combined}"
 
+def get_client():
+    if CHROMA_MODE == "http":
+        return chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+    if CHROMA_MODE == "persistent":
+        return chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+    raise ValueError("CHROMA_MODE must be 'http' or 'persistent'")
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Insert CSV news embeddings into pgvector")
+    parser = argparse.ArgumentParser(description="Insert CSV news embeddings into Chroma")
     parser.add_argument("--csv-path", default=CSV_PATH_DEFAULT)
     parser.add_argument("--model", default=MODEL_NAME_DEFAULT)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE_DEFAULT)
@@ -43,41 +57,37 @@ def parse_args() -> argparse.Namespace:
         "--distance",
         choices=["cosine", "l2", "ip"],
         default=DISTANCE_DEFAULT,
-        help="Distance metric used for pgvector HNSW operator class.",
+        help="Chroma HNSW space metric for the collection.",
     )
     return parser.parse_args()
 
 
-def distance_to_ops(distance: str) -> str:
-    if distance == "cosine":
-        return "vector_cosine_ops"
-    if distance == "l2":
-        return "vector_l2_ops"
-    if distance == "ip":
-        return "vector_ip_ops"
-    raise ValueError(f"Unsupported distance: {distance}")
-
-
-def cleanup_table(engine: sa.Engine, table_name: str, index_name: str) -> None:
-    """Remove the existing table/index so every run starts clean."""
-    with engine.begin() as conn:
-        conn.execute(sa.text(f"DROP INDEX IF EXISTS {index_name};"))
-        conn.execute(sa.text(f"DROP TABLE IF EXISTS {table_name};"))
+def cleanup_collection(client: chromadb.ClientAPI, collection_name: str) -> None:
+    """Remove existing collection so every run starts clean."""
+    try:
+        client.delete_collection(name=collection_name)
+    except Exception:
+        # If it doesn't exist, ignore
+        pass
 
 def main():
     args = parse_args()
     csv_path = args.csv_path
     model_name = args.model
     batch_size = int(args.batch_size)
-    table_name = args.collection
+    collection_name = args.collection
     distance = args.distance
-    index_name = f"{table_name}_embedding_hnsw"
-    distance_ops = distance_to_ops(distance)
 
-    print("DB:", DATABASE_URL)
+    # Keep output label "DB:" the same
+    if CHROMA_MODE == "http":
+        db_label = f"chroma://{CHROMA_HOST}:{CHROMA_PORT} (http)"
+    else:
+        db_label = f"chroma://{os.path.abspath(CHROMA_PERSIST_DIR)} (persistent)"
+
+    print("DB:", db_label)
     print("Model:", model_name)
     print("Distance:", distance)
-    print("Collection:", table_name)
+    print("Collection:", collection_name)
 
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Local dataset not found: {csv_path}")
@@ -98,7 +108,6 @@ def main():
         "Description": "description",
     })
 
-    # Normalize label names so downstream code still uses text genres.
     df["label"] = df["label"].map(LABEL_MAP).fillna("Unknown")
     df["title"] = df["title"].fillna("")
     df["description"] = df["description"].fillna("")
@@ -119,7 +128,7 @@ def main():
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
 
-    # 4) Encode embeddings (E5 format: passage-prefixed title + description)
+    # 4) Encode embeddings
     texts = [
         build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
         for i in range(records_count)
@@ -131,71 +140,68 @@ def main():
     t_emb1 = time.perf_counter()
     embed_seconds = t_emb1 - t_emb0
 
-    # Convert vectors to lists for DB binding
+    # Convert to lists for Chroma
     emb_lists = [e.tolist() for e in embeddings]
 
-    # Prepare records
-    payload = [
-        {"title": df.iloc[i]["title"],
-         "description": df.iloc[i]["description"],
-         "genre": df.iloc[i]["label"],
-         "embedding": emb_lists[i]}
-        for i in range(records_count)
-    ]
+    # 5) Connect Chroma
+    client = get_client()
 
-    # 5) Connect DB
-    engine = sa.create_engine(DATABASE_URL, future=True)
+    # 6) "Schema" equivalent: recreate collection fresh
+    cleanup_collection(client, collection_name)
 
-    # 6) Schema
-    with engine.begin() as conn:
-        conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector;"))
-
-    cleanup_table(engine, table_name, index_name)
-
-    with engine.begin() as conn:
-        conn.execute(sa.text(f"""
-            CREATE TABLE {table_name} (
-                id BIGSERIAL PRIMARY KEY,
-                title TEXT,
-                description TEXT,
-                genre TEXT,
-                embedding vector({EXPECTED_DIM})
-            );
-        """))
+    # Chroma metric is chosen at collection creation time via metadata.
+    # Distance is chosen at collection creation time via hnsw:space metadata.
+    collection = client.create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": distance},
+    )
 
     # 7) Insert + time
-    insert_stmt = sa.text(f"""
-        INSERT INTO {table_name} (title, description, genre, embedding)
-        VALUES (:title, :description, :genre, :embedding)
-    """)
-
-    print("Inserting into Postgres...")
+    print("Inserting into Chroma...")
     t_write0 = time.perf_counter()
-    with engine.begin() as conn:
-        for start in range(0, records_count, batch_size):
-            end = min(start + batch_size, records_count)
-            conn.execute(insert_stmt, payload[start:end])
+
+    # Chroma ids must be strings; we’ll use "1..N" as stable ids
+    # (If you already have stable IDs, replace this with your own id column.)
+    for start in range(0, records_count, batch_size):
+        end = min(start + batch_size, records_count)
+
+        batch_ids = [str(i + 1) for i in range(start, end)]
+        batch_embeddings = emb_lists[start:end]
+
+        batch_metadatas = [
+            {
+                "title": df.iloc[i]["title"],
+                "description": df.iloc[i]["description"],
+                "genre": df.iloc[i]["label"],
+            }
+            for i in range(start, end)
+        ]
+
+        # If you also want to store the raw text, you can add `documents=[...]`
+        collection.add(
+            ids=batch_ids,
+            embeddings=batch_embeddings,
+            metadatas=batch_metadatas,
+        )
+
     t_write1 = time.perf_counter()
     write_seconds = t_write1 - t_write0
 
-    # 8) Build index + time (HNSW cosine)
-    with engine.begin() as conn:
-        conn.execute(sa.text(f"DROP INDEX IF EXISTS {index_name};"))
-
+    # 8) "Index build time" proxy
+    # Chroma doesn't have an explicit CREATE INDEX step like pgvector.
+    # To keep the same output format, we measure time until the first query runs after insertion.
     print("Building HNSW index...")
     t_idx0 = time.perf_counter()
-    with engine.begin() as conn:
-        conn.execute(sa.text(f"""
-            CREATE INDEX {index_name}
-            ON {table_name}
-            USING hnsw (embedding {distance_ops});
-        """))
+    _ = collection.query(
+        query_embeddings=[emb_lists[0]],
+        n_results=1,
+        include=["distances"],
+    )
     t_idx1 = time.perf_counter()
     index_seconds = t_idx1 - t_idx0
 
     # 9) Verify inserted row count
-    with engine.connect() as conn:
-        db_count = conn.execute(sa.text(f"SELECT COUNT(*) FROM {table_name};")).scalar_one()
+    db_count = collection.count()
 
     # 10) Size estimate of embeddings in MB (float32)
     approx_vec_mb = bytes_to_mb(db_count * EXPECTED_DIM * 4)

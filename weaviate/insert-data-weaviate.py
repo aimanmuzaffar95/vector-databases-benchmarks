@@ -12,7 +12,7 @@ from weaviate.classes.config import Configure, Property, DataType, VectorDistanc
 from weaviate.classes.data import DataObject
 
 
-CSV_PATH = "train.csv"
+CSV_PATH_DEFAULT = os.getenv("CSV_PATH", "train.csv")
 
 LABEL_MAP = {
     1: "World",
@@ -29,14 +29,14 @@ WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", "50051"))
 WEAVIATE_SECURE = os.getenv("WEAVIATE_SECURE", "false").lower() == "true"
 
 # Weaviate collection/class name (PascalCase is conventional)
-COLLECTION_NAME = os.getenv("WEAVIATE_COLLECTION", "NewsArticle")
+COLLECTION_NAME_DEFAULT = os.getenv("COLLECTION_NAME", os.getenv("WEAVIATE_COLLECTION", "NewsArticle"))
 
 # Pick a 1024-d model
-MODEL_NAME = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
+MODEL_NAME_DEFAULT = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
 EXPECTED_DIM = 1024
 
 # Batch config
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "128"))
+BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "128"))
 
 # Polling for count visibility after ingest
 POLL_INTERVAL_SEC = 0.5
@@ -96,18 +96,18 @@ def wait_until_ready(client: weaviate.WeaviateClient, timeout_sec: int = 60) -> 
         time.sleep(0.2)
 
 
-def recreate_collection(client: weaviate.WeaviateClient, distance: str) -> None:
+def recreate_collection(client: weaviate.WeaviateClient, collection_name: str, distance: str) -> None:
     """
     Delete existing collection and create a fresh one.
     We disable server-side vectorization because you are providing vectors manually.
     """
     # Delete if exists
-    if client.collections.exists(COLLECTION_NAME):
-        client.collections.delete(COLLECTION_NAME)
+    if client.collections.exists(collection_name):
+        client.collections.delete(collection_name)
 
     # Create collection with HNSW vector index (default in Weaviate, but made explicit)
     client.collections.create(
-        name=COLLECTION_NAME,
+        name=collection_name,
         description="News articles with externally generated sentence embeddings (E5).",
         vector_config=Configure.Vectors.self_provided(
             vector_index_config=Configure.VectorIndex.hnsw(
@@ -123,7 +123,7 @@ def recreate_collection(client: weaviate.WeaviateClient, distance: str) -> None:
     )
 
 
-def wait_until_count(client: weaviate.WeaviateClient, expected_count: int) -> float:
+def wait_until_count(client: weaviate.WeaviateClient, collection_name: str, expected_count: int) -> float:
     """
     Polls aggregate total_count until it matches expected_count.
     Returns elapsed seconds from start of polling.
@@ -131,7 +131,7 @@ def wait_until_count(client: weaviate.WeaviateClient, expected_count: int) -> fl
     start = time.perf_counter()
     deadline = start + MAX_WAIT_SEC
 
-    collection = client.collections.get(COLLECTION_NAME)
+    collection = client.collections.get(collection_name)
 
     while True:
         try:
@@ -146,13 +146,17 @@ def wait_until_count(client: weaviate.WeaviateClient, expected_count: int) -> fl
         if time.perf_counter() > deadline:
             raise TimeoutError(
                 f"Timed out waiting for object count to reach {expected_count} "
-                f"in collection {COLLECTION_NAME!r}."
+                f"in collection {collection_name!r}."
             )
         time.sleep(POLL_INTERVAL_SEC)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--csv-path", default=CSV_PATH_DEFAULT)
+    parser.add_argument("--model", default=MODEL_NAME_DEFAULT)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE_DEFAULT)
+    parser.add_argument("--collection", default=COLLECTION_NAME_DEFAULT)
     parser.add_argument(
         "--distance",
         choices=sorted(DISTANCE_MAP.keys()),
@@ -164,21 +168,25 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    csv_path = args.csv_path
+    model_name = args.model
+    batch_size = int(args.batch_size)
+    collection_name = args.collection
 
     print("Weaviate HTTP:", f"http{'s' if WEAVIATE_SECURE else ''}://{WEAVIATE_HTTP_HOST}:{WEAVIATE_HTTP_PORT}")
     print("Weaviate gRPC:", f"{WEAVIATE_GRPC_HOST}:{WEAVIATE_GRPC_PORT}")
-    print("Collection:", COLLECTION_NAME)
-    print("Model:", MODEL_NAME)
+    print("Collection:", collection_name)
+    print("Model:", model_name)
     print("Distance metric:", args.distance)
 
-    if not os.path.exists(CSV_PATH):
-        raise FileNotFoundError(f"Local dataset not found: {CSV_PATH}")
-    print(f"Using local dataset: {CSV_PATH}")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Local dataset not found: {csv_path}")
+    print(f"Using local dataset: {csv_path}")
 
-    csv_size_mb = bytes_to_mb(os.path.getsize(CSV_PATH))
+    csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
 
     # 1) Load data
-    df = pd.read_csv(CSV_PATH)
+    df = pd.read_csv(csv_path)
     expected_columns = {"Class Index", "Title", "Description"}
     received_columns = set(df.columns)
     if not expected_columns.issubset(received_columns):
@@ -200,7 +208,7 @@ def main():
 
     # 2) Load model + verify dim
     print("Loading sentence-transformers model...")
-    model = SentenceTransformer(MODEL_NAME)
+    model = SentenceTransformer(model_name)
 
     dim = model.get_sentence_embedding_dimension()
     print("Detected embedding dim:", dim)
@@ -235,15 +243,15 @@ def main():
         wait_until_ready(client)
 
         print("Recreating Weaviate collection...")
-        recreate_collection(client, args.distance)
+        recreate_collection(client, collection_name, args.distance)
 
-        collection = client.collections.get(COLLECTION_NAME)
+        collection = client.collections.get(collection_name)
 
         # 5) Insert + time (batch)
-        print(f"Inserting into Weaviate (batch_size={BATCH_SIZE})...")
+        print(f"Inserting into Weaviate (batch_size={batch_size})...")
         t_write0 = time.perf_counter()
 
-        for start, end in chunk_ranges(records_count, BATCH_SIZE):
+        for start, end in chunk_ranges(records_count, batch_size):
             batch_objects = []
             for i in range(start, end):
                 # We store sourceRowId so you can later trace back to CSV row if needed
@@ -270,7 +278,7 @@ def main():
         # Weaviate maintains HNSW as data is ingested, so there is no separate CREATE INDEX step like PGVector.
         # We measure "post-insert visibility/settling" until expected object count is visible.
         print("Waiting for Weaviate object count to reach expected size...")
-        index_seconds = wait_until_count(client, records_count)
+        index_seconds = wait_until_count(client, collection_name, records_count)
 
         # 7) Verify inserted row count
         agg = collection.aggregate.over_all(total_count=True)

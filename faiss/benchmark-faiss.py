@@ -93,6 +93,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Benchmark Recall@K for local FAISS index")
 
     p.add_argument("--artifacts-dir", default=os.getenv("FAISS_OUTPUT_DIR", "faiss/artifacts"))
+    p.add_argument(
+        "--distance",
+        default=None,
+        choices=["cosine", "dot", "l2"],
+        help="Optional distance override. Defaults to distance from metadata.json.",
+    )
     p.add_argument("--k-values", default="1,5,10")
     p.add_argument("--num-queries", type=int, default=200)
     p.add_argument("--seed", type=int, default=42)
@@ -273,6 +279,8 @@ def main() -> None:
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metric = str(metadata.get("distance", "cosine")).lower()
+    if args.distance is not None:
+        metric = args.distance.lower()
 
     print("Loading FAISS artifacts...")
     index = faiss.read_index(str(index_path))

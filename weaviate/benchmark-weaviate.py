@@ -446,7 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--num-queries", type=int, default=500, help="How many query points to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries not counted")
-    p.add_argument("--max-load-points", type=int, default=None, help="Optional cap when loading points (debug)")
+    p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debug)")
     p.add_argument(
         "--distance",
         choices=["cosine", "dot", "l2"],
@@ -487,8 +487,8 @@ def main() -> None:
 
         print("Loading points + vectors from Weaviate...")
         points = load_all_points(client, COLLECTION_NAME)
-        if args.max_load_points is not None:
-            points = points[: args.max_load_points]
+        if args.max_load_items is not None:
+            points = points[: args.max_load_items]
         dim = int(points[0].vector.shape[0])
 
         for p in points:

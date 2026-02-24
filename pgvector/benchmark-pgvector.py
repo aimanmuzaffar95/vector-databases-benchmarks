@@ -13,8 +13,8 @@ What it does:
 Usage examples:
   python3 benchmark_recall_pgvector.py
   python3 benchmark_recall_pgvector.py --k-values 1,5,10 --num-queries 500
-  python3 benchmark_recall_pgvector.py --metric cosine --ivfflat-probes 1,5,10,20,50
-  python3 benchmark_recall_pgvector.py --metric cosine --hnsw-ef-search 20,40,80,120
+  python3 benchmark_recall_pgvector.py --distance cosine --ivfflat-probes 1,5,10,20,50
+  python3 benchmark_recall_pgvector.py --distance cosine --hnsw-ef-search 20,40,80,120
 """
 
 from __future__ import annotations
@@ -446,7 +446,7 @@ def benchmark_once(
 def print_run(run: BenchmarkRun) -> None:
     print("=" * 80)
     print(f"Run: {run.label}")
-    print(f"Metric: {run.metric}")
+    print(f"Distance: {run.metric}")
     print(f"Measured queries: {run.num_queries}")
     for k in run.k_values:
         print(f"Recall@{k}: {run.avg_recall_at_k[k]:.4f}")
@@ -457,12 +457,12 @@ def print_run(run: BenchmarkRun) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Benchmark Recall@K for pgvector")
-    p.add_argument("--metric", default="cosine", choices=["cosine", "l2", "ip"], help="Distance/similarity metric")
+    p.add_argument("--distance", default="cosine", choices=["cosine", "l2", "ip"], help="Distance/similarity metric")
     p.add_argument("--k-values", default="1,5,10", help="Comma-separated K values, e.g. 1,5,10")
     p.add_argument("--num-queries", type=int, default=500, help="Number of query rows to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
     p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries excluded from stats")
-    p.add_argument("--max-load-rows", type=int, default=None, help="Optional cap when loading rows (debugging)")
+    p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debugging)")
     p.add_argument("--where-sql", type=str, default=None, help="Optional SQL predicate for loading rows, e.g. genre = :g")
     p.add_argument("--where-param", action="append", default=[], help="Optional params for --where-sql as key=value (repeatable)")
     # Runtime ANN sweeps (optional)
@@ -506,7 +506,7 @@ def main() -> None:
         EMBEDDING_COLUMN,
         where_sql=args.where_sql,
         where_params=parse_where_params(args.where_param),
-        limit=args.max_load_rows,
+        limit=args.max_load_items,
     )
     dim = int(rows[0].vector.shape[0])
     print(f"Loaded {len(rows)} vectors | dim={dim} | table={TABLE_NAME}")
@@ -522,7 +522,7 @@ def main() -> None:
             run = benchmark_once(
                 engine=engine,
                 rows=rows,
-                metric=args.metric,
+                metric=args.distance,
                 k_values=k_values,
                 num_queries=args.num_queries,
                 seed=args.seed,
@@ -535,7 +535,7 @@ def main() -> None:
             run = benchmark_once(
                 engine=engine,
                 rows=rows,
-                metric=args.metric,
+                metric=args.distance,
                 k_values=k_values,
                 num_queries=args.num_queries,
                 seed=args.seed,
@@ -547,7 +547,7 @@ def main() -> None:
         run = benchmark_once(
             engine=engine,
             rows=rows,
-            metric=args.metric,
+            metric=args.distance,
             k_values=k_values,
             num_queries=args.num_queries,
             seed=args.seed,

@@ -440,7 +440,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--num-queries", type=int, default=500, help="How many query points to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries not counted")
-    p.add_argument("--max-load-points", type=int, default=None, help="Optional cap when loading points (debug)")
+    p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debug)")
+    p.add_argument(
+        "--distance",
+        choices=["cosine", "dot", "euclid", "manhattan"],
+        default=None,
+        help="Distance metric for exact NumPy ground truth. If omitted, infer from collection config.",
+    )
     p.add_argument("--hnsw-ef", type=str, default=None, help="Comma-separated hnsw_ef values to sweep")
     p.add_argument("--exact-qdrant", action="store_true", help="Force Qdrant exact=True (sanity baseline)")
     return p
@@ -461,13 +467,17 @@ def main() -> None:
     print(f"Qdrant: {QDRANT_URL}")
     print(f"Collection: {COLLECTION_NAME}")
     info = client.get_collection(COLLECTION_NAME)
-    distance_name = infer_distance_name(info)
-    print(f"Detected distance: {distance_name}")
+    inferred_distance_name = infer_distance_name(info)
+    distance_name = args.distance or inferred_distance_name
+    if args.distance:
+        print(f"Distance (cli): {distance_name}")
+    else:
+        print(f"Detected distance: {distance_name}")
 
     print("Loading points + vectors from Qdrant...")
     points = load_all_points(client, COLLECTION_NAME)
-    if args.max_load_points is not None:
-        points = points[: args.max_load_points]
+    if args.max_load_items is not None:
+        points = points[: args.max_load_items]
     dim = int(points[0].vector.shape[0])
 
     for p in points:
