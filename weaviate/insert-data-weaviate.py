@@ -34,11 +34,7 @@ COLLECTION_NAME_DEFAULT = os.getenv("COLLECTION_NAME", os.getenv("WEAVIATE_COLLE
 # Pick a 1024-d model
 MODEL_NAME_DEFAULT = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
 EXPECTED_DIM = 1024
-
-# Batch config
 BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "128"))
-
-# Polling for count visibility after ingest
 POLL_INTERVAL_SEC = 0.5
 MAX_WAIT_SEC = 60 * 10  # 10 minutes safety cap
 
@@ -184,8 +180,6 @@ def main():
     print(f"Using local dataset: {csv_path}")
 
     csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-
-    # 1) Load data
     df = pd.read_csv(csv_path)
     expected_columns = {"Class Index", "Title", "Description"}
     received_columns = set(df.columns)
@@ -205,8 +199,6 @@ def main():
 
     records_count = len(df)
     print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-
-    # 2) Load model + verify dim
     print("Loading sentence-transformers model...")
     model = SentenceTransformer(model_name)
 
@@ -218,8 +210,6 @@ def main():
             f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
-
-    # 3) Encode embeddings (E5 format: passage-prefixed title + description)
     texts = [
         build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
         for i in range(records_count)
@@ -236,8 +226,6 @@ def main():
     embed_seconds = t_emb1 - t_emb0
 
     emb_lists = [e.tolist() for e in embeddings]
-
-    # 4) Connect Weaviate + recreate collection
     client = connect_weaviate()
     try:
         wait_until_ready(client)
@@ -246,8 +234,6 @@ def main():
         recreate_collection(client, collection_name, args.distance)
 
         collection = client.collections.get(collection_name)
-
-        # 5) Insert + time (batch)
         print(f"Inserting into Weaviate (batch_size={batch_size})...")
         t_write0 = time.perf_counter()
 
@@ -273,18 +259,12 @@ def main():
 
         t_write1 = time.perf_counter()
         write_seconds = t_write1 - t_write0
-
-        # 6) "Index build" timing in Weaviate
         # Weaviate maintains HNSW as data is ingested, so there is no separate CREATE INDEX step like PGVector.
         # We measure "post-insert visibility/settling" until expected object count is visible.
         print("Waiting for Weaviate object count to reach expected size...")
         index_seconds = wait_until_count(client, collection_name, records_count)
-
-        # 7) Verify inserted row count
         agg = collection.aggregate.over_all(total_count=True)
         db_count = int(agg.total_count or 0)
-
-        # 8) Approx vector memory estimate (float32 only; DB/index overhead not included)
         approx_vec_mb = bytes_to_mb(db_count * EXPECTED_DIM * 4)
 
         print("\n==== SUMMARY ====")

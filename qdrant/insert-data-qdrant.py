@@ -20,15 +20,9 @@ LABEL_MAP = {
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME_DEFAULT = os.getenv("COLLECTION_NAME", "news_articles")
 DISTANCE_DEFAULT = os.getenv("QDRANT_DISTANCE", "cosine").strip().lower()
-
-# Model / dim
 MODEL_NAME_DEFAULT = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
 EXPECTED_DIM = 1024
-
-# Insert batching
 BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "128"))
-
-# Polling config for "ready/optimized after insert"
 POLL_INTERVAL_SEC = 0.5
 MAX_WAIT_SEC = 60 * 30  # 30 minutes safety cap
 
@@ -132,15 +126,11 @@ def main():
     print("Model:", model_name)
     print("Distance:", distance)
     print("Collection:", collection_name)
-
-    # 1) Load local CSV
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Local dataset not found: {csv_path}")
     print(f"Using local dataset: {csv_path}")
 
     csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-
-    # 2) Load data
     df = pd.read_csv(csv_path)
     expected_columns = {"Class Index", "Title", "Description"}
     received_columns = set(df.columns)
@@ -159,8 +149,6 @@ def main():
 
     records_count = len(df)
     print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-
-    # 3) Load model + verify dim
     print("Loading sentence-transformers model...")
     model = SentenceTransformer(model_name)
     dim = model.get_sentence_embedding_dimension()
@@ -171,8 +159,6 @@ def main():
             f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
-
-    # 4) Encode embeddings (E5 format: passage-prefixed title + description)
     texts = [
         build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
         for i in range(records_count)
@@ -184,11 +170,7 @@ def main():
     embed_seconds = t_emb1 - t_emb0
 
     vectors = [v.tolist() for v in embeddings]
-
-    # 5) Connect Qdrant
     client = QdrantClient(url=QDRANT_URL)
-
-    # 6) Recreate collection each run (as requested)
     if client.collection_exists(collection_name):
         print("Deleting existing collection...")
         client.delete_collection(collection_name)
@@ -198,8 +180,6 @@ def main():
         collection_name=collection_name,
         vectors_config=qm.VectorParams(size=EXPECTED_DIM, distance=distance_enum),
     )
-
-    # 7) Upsert + time to write
     print(f"Inserting into Qdrant (batch_size={batch_size})...")
     t_write0 = time.perf_counter()
 
@@ -230,17 +210,10 @@ def main():
     # Ensure all writes are committed/visible before optimization timing
     # client.wait_collection_green(COLLECTION_NAME)
     wait_until_collection_available(client, collection_name)
-
-
-    # 8) Index/build time definition: time until optimized/ready after insert
     print("Building Qdrant index...")
     index_seconds = wait_until_optimized(client, collection_name)
-
-    # 9) Verify count
     info = client.get_collection(collection_name)
     points_count = info.points_count or 0
-
-    # 10) Size estimate of embeddings in MB (float32)
     approx_vec_mb = bytes_to_mb(points_count * EXPECTED_DIM * 4)
 
     print("\n==== SUMMARY ====")

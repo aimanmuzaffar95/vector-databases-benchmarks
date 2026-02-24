@@ -95,15 +95,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--artifacts-dir", default=os.getenv("FAISS_OUTPUT_DIR", "faiss/artifacts"))
     p.add_argument(
         "--distance",
-        default=None,
+        default="cosine",
         choices=["cosine", "dot", "l2"],
-        help="Optional distance override. Defaults to distance from metadata.json.",
+        help="Distance metric for benchmark and exact NumPy ground truth.",
     )
     p.add_argument("--k-values", default="1,5,10")
-    p.add_argument("--num-queries", type=int, default=200)
+    p.add_argument("--num-queries", type=int, default=480)
     p.add_argument("--seed", type=int, default=42)
-
-    # Optional sweeps
     p.add_argument("--nprobe", default=None, help="Comma-separated nprobe values for IVF")
     p.add_argument("--hnsw-ef-search", default=None, help="Comma-separated efSearch values for HNSW")
 
@@ -248,20 +246,20 @@ def benchmark_once(
 
 
 def print_run(run: BenchmarkRun) -> None:
-    print("\n" + "=" * 72)
+    print("===============")
     print("Benchmark Results")
-    print("=" * 72)
-    print(f"Run label             : {run.label}")
-    print(f"Metric                : {run.metric}")
-    print(f"Queries benchmarked   : {run.num_queries}")
-    print("-" * 72)
+    print("===============")
+    print(f"Run: {run.label}")
+    print(f"Distance: {run.metric}")
+    print(f"Measured queries: {run.num_queries}")
+    print("-------------------------------------")
     for k in run.k_values:
-        print(f"Recall@{k:<2}            : {run.avg_recall_at_k[k]:.4f}")
-    print("-" * 72)
-    print(f"Latency avg (ms)      : {run.avg_latency_ms:.3f}")
-    print(f"Latency p50 (ms)      : {run.p50_latency_ms:.3f}")
-    print(f"Latency p95 (ms)      : {run.p95_latency_ms:.3f}")
-    print("=" * 72)
+        print(f"Recall@{k}: {run.avg_recall_at_k[k]:.4f}")
+    print("-------------------------------------")
+    print(f"Latency avg: {run.avg_latency_ms:.2f} ms")
+    print(f"Latency p50: {run.p50_latency_ms:.2f} ms")
+    print(f"Latency p95: {run.p95_latency_ms:.2f} ms")
+    print("-------------------------------------")
 
 
 def main() -> None:
@@ -352,6 +350,8 @@ def main() -> None:
 
     for run in runs:
         print_run(run)
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":

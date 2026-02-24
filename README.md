@@ -1,19 +1,19 @@
 # Vector DB Embedding Ingest + Recall Benchmarks
 
-This project ingests `train.csv`, generates embeddings with `intfloat/e5-large-v2` (1024 dims), stores vectors in multiple backends, and benchmarks Recall@K plus latency.
+This project ingests `train.csv`, generates 1024-d embeddings using `intfloat/e5-large-v2`, stores vectors in multiple backends, and benchmarks Recall@K + latency.
 
-Backends:
-- pgvector (PostgreSQL)
-- Chroma
-- Qdrant
-- Weaviate
-- Milvus
-- FAISS
+Supported backends:
+- `pgvector` (PostgreSQL)
+- `chroma`
+- `qdrant`
+- `weaviate`
+- `milvus`
+- `faiss`
 
 ## Requirements
 
 - Python 3.9+
-- Docker + Docker Compose (for DB backends)
+- Docker + Docker Compose (for non-FAISS backends)
 
 Install dependencies:
 
@@ -21,190 +21,135 @@ Install dependencies:
 pip install pandas sqlalchemy psycopg2-binary sentence-transformers numpy chromadb qdrant-client weaviate-client pymilvus faiss-cpu
 ```
 
-## Start Databases
+## Quick Start (Unified Runner)
 
-pgvector:
+Use `run_benchmarks.py` to orchestrate docker / insert / benchmark steps across one or more backends.
+
 ```bash
-docker compose -f docker-compose-pgvector.yml up -d
+python3 run_benchmarks.py -dbname all --docker --insert --benchmark
 ```
 
-Chroma:
+Common examples:
+
 ```bash
-docker compose -f docker-compose-chroma.yml up -d
+# Start containers + benchmark all backends
+python3 run_benchmarks.py -dbname all --docker --benchmark
+
+# Insert only for pgvector and qdrant
+python3 run_benchmarks.py -dbname pgvector,qdrant --insert
+
+# Benchmark only faiss
+python3 run_benchmarks.py -dbname faiss --benchmark
+
+# Forward extra args to benchmark scripts
+python3 run_benchmarks.py -dbname all --benchmark --benchmark-args "--k-values 1,5,10 --num-queries 300"
 ```
 
-Qdrant:
-```bash
-docker compose -f docker-compose-qdrant.yml up -d
+### Unified Runner Flags
+
+- `-dbname, --dbname` required; comma-separated backend names or `all`
+- `--docker` start backend containers (`faiss` is skipped as local backend)
+- `--insert` run insert scripts
+- `--benchmark` run benchmark scripts
+- `--insert-args "..."` pass-through args for insert scripts
+- `--benchmark-args "..."` pass-through args for benchmark scripts
+
+## Benchmark Output Format
+
+Each `benchmark-*.py` script prints runs in a standardized format:
+
+```text
+===============
+Benchmark Results
+===============
+Run: default
+Distance: cosine
+Measured queries: 480
+-------------------------------------
+Recall@1: 1.0000
+Recall@5: 0.9880
+Recall@10: 0.9860
+-------------------------------------
+Latency avg: 0.25 ms
+Latency p50: 0.16 ms
+Latency p95: 0.37 ms
+-------------------------------------
 ```
 
-Weaviate:
-```bash
-docker compose -f docker-compose-weviate.yml up -d
-```
+After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated final table:
 
-Milvus:
-```bash
-docker compose -f docker-compose-milvus.yml up -d
-```
+- `DB`
+- `Run`
+- `Distance`
+- `Queries`
+- `Recall@1`, `Recall@5`, `Recall@10`
+- `Lat avg (ms)`, `Lat p50 (ms)`, `Lat p95 (ms)`
 
-## Canonical CLI Flags
+## Script Inventory (Current)
 
-The scripts now use canonical names (breaking change):
-- distance: `--distance`
-- load cap in benchmark scripts: `--max-load-items`
+### Insert scripts
+- `pgvector/insert-data-pgvector.py`
+- `chroma/insert-data-chroma.py`
+- `qdrant/insert-data-qdrant.py`
+- `weaviate/insert-data-weaviate.py`
+- `milvus/insert-data-milvus.py`
+- `faiss/insert-data-faiss.py`
 
-Removed legacy flags:
-- `--metric`
-- `--max-load-rows`
-- `--max-load-points`
+### Benchmark scripts
+- `pgvector/benchmark-pgvector.py`
+- `chroma/benchmark-chroma.py`
+- `qdrant/benchmark-qdrant.py`
+- `weaviate/benchmark-weaviate.py`
+- `milvus/benchmark-milvus.py`
+- `faiss/benchmark-faiss.py`
 
-## Ingest Commands
+## Docker Compose Files
 
-### pgvector
-```bash
-python3 pgvector/insert-data-pgvector.py
-python3 pgvector/insert-data-pgvector.py --collection news_articles --distance cosine --batch-size 1000
-python3 pgvector/insert-data-pgvector.py --distance ip
-```
+- `docker-compose-pgvector.yml`
+- `docker-compose-chroma.yml`
+- `docker-compose-qdrant.yml`
+- `docker-compose-weviate.yml`
+- `docker-compose-milvus.yml`
 
-### Chroma
-```bash
-python3 chroma/insert-data-chroma.py
-python3 chroma/insert-data-chroma.py --collection news_articles --distance cosine --batch-size 512
-python3 chroma/insert-data-chroma.py --distance l2
-```
+## Backend Notes
 
-### Qdrant
-```bash
-python3 qdrant/insert-data-qdrant.py
-python3 qdrant/insert-data-qdrant.py --collection news_articles --distance cosine --batch-size 128
-python3 qdrant/insert-data-qdrant.py --distance dot
-```
+- `run_benchmarks.py` defaults to `--distance cosine` for insert and benchmark if you do not pass `--distance`.
+- `run_benchmarks.py` defaults benchmark scripts to `--num-queries 480` if you do not pass `--num-queries`.
+- Benchmarks default `--warmup-queries` to `0`, so measured queries match requested queries by default.
+- Use the same `--distance` family during insert and benchmark for fair comparisons.
+- Milvus benchmark now fails fast if requested `--distance` does not match the collection index metric.
+- Weaviate benchmark includes retry-based connection startup handling for container readiness.
+- FAISS runs locally and does not require Docker.
 
-### Weaviate
-```bash
-python3 weaviate/insert-data-weaviate.py
-python3 weaviate/insert-data-weaviate.py --collection NewsArticle --distance cosine --batch-size 128
-python3 weaviate/insert-data-weaviate.py --distance l2
-```
-
-### Milvus
-```bash
-python3 milvus/insert-data-milvus.py
-python3 milvus/insert-data-milvus.py --collection news_articles --distance cosine --batch-size 1000
-python3 milvus/insert-data-milvus.py --distance dot
-```
-
-### FAISS
-```bash
-python3 faiss/insert-data-faiss.py --distance cosine --index-type hnsw --overwrite
-python3 faiss/insert-data-faiss.py --distance dot --index-type ivfflat --ivf-nlist 1024 --overwrite
-python3 faiss/insert-data-faiss.py --distance l2 --index-type flat --overwrite
-```
-
-## Benchmark Commands
-
-### pgvector
-```bash
-python3 pgvector/benchmark_pgvector.py
-python3 pgvector/benchmark_pgvector.py --distance cosine --k-values 1,5,10 --num-queries 500
-python3 pgvector/benchmark_pgvector.py --distance ip --hnsw-ef-search 20,40,80,120
-python3 pgvector/benchmark_pgvector.py --distance cosine --ivfflat-probes 1,5,10,20,50
-python3 pgvector/benchmark_pgvector.py --distance cosine --max-load-items 1000 --where-sql "genre = :g" --where-param g=Sports
-```
-
-### Chroma
-```bash
-python3 chroma/benchmark_chroma.py
-python3 chroma/benchmark_chroma.py --distance cosine --k-values 1,5,10 --num-queries 500
-python3 chroma/benchmark_chroma.py --distance cosine --max-load-items 1000
-python3 chroma/benchmark_chroma.py --distance cosine --where-json '{"genre":"Sports"}'
-```
-
-### Qdrant
-```bash
-python3 qdrant/benchmark_qdrant.py
-python3 qdrant/benchmark_qdrant.py --distance cosine --k-values 1,5,10 --num-queries 500
-python3 qdrant/benchmark_qdrant.py --distance cosine --hnsw-ef 32,64,128,256
-python3 qdrant/benchmark_qdrant.py --distance cosine --max-load-items 1000 --exact-qdrant
-```
-
-### Weaviate
-```bash
-python3 weaviate/benchmark_weaviate.py
-python3 weaviate/benchmark_weaviate.py --distance cosine --k-values 1,5,10 --num-queries 500
-python3 weaviate/benchmark_weaviate.py --distance dot --hnsw-ef 32,64,128
-python3 weaviate/benchmark_weaviate.py --distance l2 --max-load-items 1000 --exact-weaviate
-```
-
-### Milvus
-```bash
-python3 milvus/benchmark_milvus.py
-python3 milvus/benchmark_milvus.py --distance cosine --consistency-level Bounded
-python3 milvus/benchmark_milvus.py --distance cosine --hnsw-ef 32,64,128
-python3 milvus/benchmark_milvus.py --distance cosine --nprobe 8,16,32
-python3 milvus/benchmark_milvus.py --distance cosine --k-values 1,5,10 --num-queries 200
-```
-
-### FAISS
-```bash
-python3 faiss/benchmark_faiss.py
-python3 faiss/benchmark_faiss.py --distance cosine --k-values 1,5,10 --num-queries 500
-python3 faiss/benchmark_faiss.py --distance dot --nprobe 4,8,16,32
-python3 faiss/benchmark_faiss.py --distance cosine --hnsw-ef-search 32,64,128,256
-```
-
-## Useful Shared Insert Flags
-
-Most insert scripts accept:
-- `--csv-path`
-- `--model`
-- `--batch-size`
-- `--collection`
-- `--distance`
-
-FAISS and Milvus have additional backend-specific flags (for example index settings).
-
-## Environment Variables
+## Environment Variables (Highlights)
 
 Common:
-- `EMBEDDING_MODEL` (default: `intfloat/e5-large-v2`)
 - `CSV_PATH` (default: `train.csv`)
-- `BATCH_SIZE` (backend-specific defaults)
+- `EMBEDDING_MODEL` (default: `intfloat/e5-large-v2`)
 
-pgvector:
+pgvector benchmark:
 - `DATABASE_URL`
-- benchmark: `TABLE_NAME`, `ID_COLUMN`, `EMBEDDING_COLUMN`, `GENRE_COLUMN`
+- `TABLE_NAME`, `ID_COLUMN`, `EMBEDDING_COLUMN`, `GENRE_COLUMN`
 
-Chroma:
+chroma:
 - `CHROMA_MODE`, `CHROMA_HOST`, `CHROMA_PORT`, `CHROMA_PERSIST_DIR`
 - `COLLECTION_NAME`
 
-Qdrant:
+qdrant:
 - `QDRANT_URL`
 - `COLLECTION_NAME`
 
-Weaviate:
+weaviate:
 - `WEAVIATE_HTTP_HOST`, `WEAVIATE_HTTP_PORT`
 - `WEAVIATE_GRPC_HOST`, `WEAVIATE_GRPC_PORT`
-- `WEAVIATE_SECURE`
-- `WEAVIATE_COLLECTION`
+- `WEAVIATE_SECURE`, `WEAVIATE_COLLECTION`
 
-Milvus:
+milvus:
 - `MILVUS_HOST`, `MILVUS_PORT`
 - `MILVUS_COLLECTION`, `MILVUS_INDEX_NAME`
 - `MILVUS_DISTANCE` / `MILVUS_METRIC`
-- `MILVUS_HNSW_M`, `MILVUS_HNSW_EF_CONSTRUCTION`
-- `MILVUS_CONSISTENCY_LEVEL`
 
-FAISS:
+faiss:
 - `FAISS_DISTANCE`, `FAISS_INDEX_TYPE`
 - `FAISS_IVF_NLIST`, `FAISS_HNSW_M`
 - `FAISS_OUTPUT_DIR`
-
-## Notes
-
-- Keep ingest and benchmark embedding model consistent.
-- For backend comparisons, use matching `--distance` during ingest and benchmark.
-- Milvus benchmark validates that requested `--distance` matches collection index metric.

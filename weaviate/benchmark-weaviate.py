@@ -11,7 +11,7 @@ What it does:
 
 Examples:
   python3 benchmark_recall_weaviate.py
-  python3 benchmark_recall_weaviate.py --k-values 1,5,10 --num-queries 500
+  python3 benchmark_recall_weaviate.py --k-values 1,5,10 --num-queries 480
   python3 benchmark_recall_weaviate.py --exact-weaviate
 """
 
@@ -66,11 +66,6 @@ class BenchmarkRun:
     avg_latency_ms: float
     p50_latency_ms: float
     p95_latency_ms: float
-
-
-# -----------------------------
-# Helpers
-# -----------------------------
 def parse_k_values(text: str) -> list[int]:
     vals: list[int] = []
     for p in text.split(","):
@@ -137,21 +132,31 @@ def infer_distance_name(collection_config: Any) -> str:
 
     # Most local vector setups default to cosine; your ingestion script sets cosine explicitly.
     return "cosine"
-
-
-# -----------------------------
-# Weaviate connection/loading/search
-# -----------------------------
 def connect_weaviate() -> weaviate.WeaviateClient:
-    client = weaviate.connect_to_custom(
-        http_host=WEAVIATE_HTTP_HOST,
-        http_port=WEAVIATE_HTTP_PORT,
-        http_secure=WEAVIATE_SECURE,
-        grpc_host=WEAVIATE_GRPC_HOST,
-        grpc_port=WEAVIATE_GRPC_PORT,
-        grpc_secure=WEAVIATE_SECURE,
-    )
-    return client
+    timeout_sec = float(os.getenv("WEAVIATE_CONNECT_TIMEOUT_SEC", "90"))
+    retry_sleep_sec = float(os.getenv("WEAVIATE_CONNECT_RETRY_SEC", "2"))
+    deadline = time.time() + max(timeout_sec, 1.0)
+    last_err: Exception | None = None
+
+    while time.time() < deadline:
+        try:
+            client = weaviate.connect_to_custom(
+                http_host=WEAVIATE_HTTP_HOST,
+                http_port=WEAVIATE_HTTP_PORT,
+                http_secure=WEAVIATE_SECURE,
+                grpc_host=WEAVIATE_GRPC_HOST,
+                grpc_port=WEAVIATE_GRPC_PORT,
+                grpc_secure=WEAVIATE_SECURE,
+            )
+            return client
+        except Exception as err:
+            last_err = err
+            time.sleep(max(retry_sleep_sec, 0.2))
+
+    raise RuntimeError(
+        f"Could not connect to Weaviate within {timeout_sec:.0f}s "
+        f"at {WEAVIATE_HTTP_HOST}:{WEAVIATE_HTTP_PORT}"
+    ) from last_err
 
 
 def load_all_points(client: weaviate.WeaviateClient, collection_name: str) -> list[PointVec]:
@@ -275,11 +280,6 @@ def weaviate_search(
             break
 
     return SearchResult(ids=ids, latency_ms=latency_ms)
-
-
-# -----------------------------
-# Exact ground truth (NumPy)
-# -----------------------------
 def build_matrix(points: list[PointVec]) -> tuple[np.ndarray, np.ndarray]:
     ids = np.array([p.point_id for p in points], dtype=np.int64)
     mat = np.stack([p.vector for p in points]).astype(np.float32, copy=False)
@@ -335,11 +335,6 @@ def exact_topk_ids(
         if len(out) >= k:
             break
     return out
-
-
-# -----------------------------
-# Benchmark runner
-# -----------------------------
 def benchmark_once(
     *,
     client: weaviate.WeaviateClient,
@@ -426,32 +421,32 @@ def benchmark_once(
 
 
 def print_run(run: BenchmarkRun) -> None:
-    print("=" * 80)
+    print("===============")
+    print("Benchmark Results")
+    print("===============")
     print(f"Run: {run.label}")
-    print(f"Metric (collection): {run.metric}")
+    print(f"Distance: {run.metric}")
     print(f"Measured queries: {run.num_queries}")
+    print("-------------------------------------")
     for k in run.k_values:
         print(f"Recall@{k}: {run.avg_recall_at_k[k]:.4f}")
+    print("-------------------------------------")
     print(f"Latency avg: {run.avg_latency_ms:.2f} ms")
     print(f"Latency p50: {run.p50_latency_ms:.2f} ms")
     print(f"Latency p95: {run.p95_latency_ms:.2f} ms")
-
-
-# -----------------------------
-# CLI
-# -----------------------------
+    print("-------------------------------------")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Benchmark Recall@K for a Weaviate collection")
     p.add_argument("--k-values", default="1,5,10", help="Comma-separated K values")
-    p.add_argument("--num-queries", type=int, default=500, help="How many query points to sample")
+    p.add_argument("--num-queries", type=int, default=480, help="How many query points to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
-    p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries not counted")
+    p.add_argument("--warmup-queries", type=int, default=0, help="Warm-up queries not counted")
     p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debug)")
     p.add_argument(
         "--distance",
         choices=["cosine", "dot", "l2"],
-        default=None,
-        help="Distance metric used for exact NumPy ground-truth computation. If omitted, infer from collection config.",
+        default="cosine",
+        help="Distance metric used for exact NumPy ground-truth computation.",
     )
     p.add_argument("--hnsw-ef", type=str, default=None, help="Comma-separated hnsw_ef values to sweep (kept for compatibility; may be ignored by client/server)")
     p.add_argument("--exact-weaviate", action="store_true", help="Label run as exact baseline (Weaviate still uses ANN query; exact GT is NumPy)")
@@ -498,8 +493,6 @@ def main() -> None:
         print(f"Loaded points: {len(points)} | dim={dim}")
 
         runs: list[BenchmarkRun] = []
-
-        # If exact flag is passed, run "exact-labeled" baseline first
         if args.exact_weaviate:
             runs.append(
                 benchmark_once(
@@ -515,8 +508,6 @@ def main() -> None:
                     exact_qdrant=True,  # label compatibility
                 )
             )
-
-        # ANN runs
         if hnsw_ef_values:
             for ef in hnsw_ef_values:
                 runs.append(
@@ -534,7 +525,6 @@ def main() -> None:
                     )
                 )
         elif not args.exact_weaviate:
-            # Single ANN run with default collection/runtime params
             runs.append(
                 benchmark_once(
                     client=client,
@@ -550,7 +540,6 @@ def main() -> None:
                 )
             )
 
-        print("\nBenchmark Results")
         for run in runs:
             print_run(run)
 

@@ -14,7 +14,7 @@ If your client version prefers query_points(), see notes at bottom.
 
 Examples:
   python3 benchmark_recall_qdrant.py
-  python3 benchmark_recall_qdrant.py --k-values 1,5,10 --num-queries 500
+  python3 benchmark_recall_qdrant.py --k-values 1,5,10 --num-queries 480
   python3 benchmark_recall_qdrant.py --hnsw-ef 32,64,128,256
   python3 benchmark_recall_qdrant.py --exact-qdrant
 """
@@ -60,11 +60,6 @@ class BenchmarkRun:
     avg_latency_ms: float
     p50_latency_ms: float
     p95_latency_ms: float
-
-
-# -----------------------------
-# Helpers
-# -----------------------------
 def parse_k_values(text: str) -> list[int]:
     vals: list[int] = []
     for p in text.split(","):
@@ -142,11 +137,6 @@ def infer_distance_name(collection_info: Any) -> str:
     if distance == qm.Distance.MANHATTAN:
         return "manhattan"
     return str(distance).lower()
-
-
-# -----------------------------
-# Qdrant loading/search
-# -----------------------------
 def load_all_points(client: QdrantClient, collection_name: str) -> list[PointVec]:
     """
     Scroll the entire collection and fetch vectors.
@@ -269,11 +259,6 @@ def qdrant_search(
             break
 
     return SearchResult(ids=ids, latency_ms=latency_ms)
-
-
-# -----------------------------
-# Exact ground truth (NumPy)
-# -----------------------------
 def build_matrix(points: list[PointVec]) -> tuple[np.ndarray, np.ndarray]:
     ids = np.array([p.point_id for p in points], dtype=np.int64)
     mat = np.stack([p.vector for p in points]).astype(np.float32, copy=False)
@@ -329,11 +314,6 @@ def exact_topk_ids(
         if len(out) >= k:
             break
     return out
-
-
-# -----------------------------
-# Benchmark runner
-# -----------------------------
 def benchmark_once(
     *,
     client: QdrantClient,
@@ -420,32 +400,32 @@ def benchmark_once(
 
 
 def print_run(run: BenchmarkRun) -> None:
-    print("=" * 80)
+    print("===============")
+    print("Benchmark Results")
+    print("===============")
     print(f"Run: {run.label}")
-    print(f"Metric (collection): {run.metric}")
+    print(f"Distance: {run.metric}")
     print(f"Measured queries: {run.num_queries}")
+    print("-------------------------------------")
     for k in run.k_values:
         print(f"Recall@{k}: {run.avg_recall_at_k[k]:.4f}")
+    print("-------------------------------------")
     print(f"Latency avg: {run.avg_latency_ms:.2f} ms")
     print(f"Latency p50: {run.p50_latency_ms:.2f} ms")
     print(f"Latency p95: {run.p95_latency_ms:.2f} ms")
-
-
-# -----------------------------
-# CLI
-# -----------------------------
+    print("-------------------------------------")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Benchmark Recall@K for a Qdrant collection")
     p.add_argument("--k-values", default="1,5,10", help="Comma-separated K values")
-    p.add_argument("--num-queries", type=int, default=500, help="How many query points to sample")
+    p.add_argument("--num-queries", type=int, default=480, help="How many query points to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
-    p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries not counted")
+    p.add_argument("--warmup-queries", type=int, default=0, help="Warm-up queries not counted")
     p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debug)")
     p.add_argument(
         "--distance",
         choices=["cosine", "dot", "euclid", "manhattan"],
-        default=None,
-        help="Distance metric for exact NumPy ground truth. If omitted, infer from collection config.",
+        default="cosine",
+        help="Distance metric for exact NumPy ground truth.",
     )
     p.add_argument("--hnsw-ef", type=str, default=None, help="Comma-separated hnsw_ef values to sweep")
     p.add_argument("--exact-qdrant", action="store_true", help="Force Qdrant exact=True (sanity baseline)")
@@ -487,8 +467,6 @@ def main() -> None:
     print(f"Loaded points: {len(points)} | dim={dim}")
 
     runs: list[BenchmarkRun] = []
-
-    # If exact flag is passed, run exact=True baseline first
     if args.exact_qdrant:
         runs.append(
             benchmark_once(
@@ -504,8 +482,6 @@ def main() -> None:
                 exact_qdrant=True,
             )
         )
-
-    # ANN runs
     if hnsw_ef_values:
         for ef in hnsw_ef_values:
             runs.append(
@@ -523,7 +499,6 @@ def main() -> None:
                 )
             )
     elif not args.exact_qdrant:
-        # Single ANN run with default collection/runtime params
         runs.append(
             benchmark_once(
                 client=client,
@@ -539,7 +514,6 @@ def main() -> None:
             )
         )
 
-    print("\nBenchmark Results")
     for run in runs:
         print_run(run)
 

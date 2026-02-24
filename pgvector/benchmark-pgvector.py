@@ -12,7 +12,7 @@ What it does:
 
 Usage examples:
   python3 benchmark_recall_pgvector.py
-  python3 benchmark_recall_pgvector.py --k-values 1,5,10 --num-queries 500
+  python3 benchmark_recall_pgvector.py --k-values 1,5,10 --num-queries 480
   python3 benchmark_recall_pgvector.py --distance cosine --ivfflat-probes 1,5,10,20,50
   python3 benchmark_recall_pgvector.py --distance cosine --hnsw-ef-search 20,40,80,120
 """
@@ -31,11 +31,6 @@ from typing import Any, Iterable
 
 import numpy as np
 import sqlalchemy as sa
-
-
-# -----------------------------
-# Config (overridable via env)
-# -----------------------------
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg2://postgres:postgres@localhost:5432/appdb",
@@ -78,11 +73,6 @@ class BenchmarkRun:
     p50_latency_ms: float
     p95_latency_ms: float
     avg_latency_ms: float
-
-
-# -----------------------------
-# Metric helpers
-# -----------------------------
 def parse_k_values(text: str) -> list[int]:
     values = []
     for part in text.split(","):
@@ -140,11 +130,6 @@ def metric_to_pgvector_operator(metric: str) -> str:
     if metric in {"ip", "inner_product", "inner-product"}:
         return "<#>"
     raise ValueError(f"Unsupported metric: {metric}")
-
-
-# -----------------------------
-# DB loading and search
-# -----------------------------
 def create_engine(url: str) -> sa.Engine:
     return sa.create_engine(url, future=True, pool_pre_ping=True)
 
@@ -270,11 +255,6 @@ def search_pgvector(
 
     ids = [int(r["id"]) for r in rows]
     return SearchResult(ids=ids, latency_ms=latency_ms)
-
-
-# -----------------------------
-# Exact ground truth (NumPy)
-# -----------------------------
 def maybe_normalize(matrix: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     # avoid division by zero
@@ -334,11 +314,6 @@ def exact_topk_ids(
         if len(result_ids) >= k:
             break
     return result_ids
-
-
-# -----------------------------
-# Benchmark runner
-# -----------------------------
 def benchmark_once(
     *,
     engine: sa.Engine,
@@ -444,28 +419,32 @@ def benchmark_once(
 
 
 def print_run(run: BenchmarkRun) -> None:
-    print("=" * 80)
+    print("===============")
+    print("Benchmark Results")
+    print("===============")
     print(f"Run: {run.label}")
     print(f"Distance: {run.metric}")
     print(f"Measured queries: {run.num_queries}")
+    print("-------------------------------------")
     for k in run.k_values:
         print(f"Recall@{k}: {run.avg_recall_at_k[k]:.4f}")
+    print("-------------------------------------")
     print(f"Latency avg: {run.avg_latency_ms:.2f} ms")
     print(f"Latency p50: {run.p50_latency_ms:.2f} ms")
     print(f"Latency p95: {run.p95_latency_ms:.2f} ms")
+    print("-------------------------------------")
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Benchmark Recall@K for pgvector")
     p.add_argument("--distance", default="cosine", choices=["cosine", "l2", "ip"], help="Distance/similarity metric")
     p.add_argument("--k-values", default="1,5,10", help="Comma-separated K values, e.g. 1,5,10")
-    p.add_argument("--num-queries", type=int, default=500, help="Number of query rows to sample")
+    p.add_argument("--num-queries", type=int, default=480, help="Number of query rows to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
-    p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries excluded from stats")
+    p.add_argument("--warmup-queries", type=int, default=0, help="Warm-up queries excluded from stats")
     p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debugging)")
     p.add_argument("--where-sql", type=str, default=None, help="Optional SQL predicate for loading rows, e.g. genre = :g")
     p.add_argument("--where-param", action="append", default=[], help="Optional params for --where-sql as key=value (repeatable)")
-    # Runtime ANN sweeps (optional)
     p.add_argument("--ivfflat-probes", type=str, default=None, help="Comma-separated probes values to sweep")
     p.add_argument("--hnsw-ef-search", type=str, default=None, help="Comma-separated ef_search values to sweep")
     return p
@@ -510,8 +489,6 @@ def main() -> None:
     )
     dim = int(rows[0].vector.shape[0])
     print(f"Loaded {len(rows)} vectors | dim={dim} | table={TABLE_NAME}")
-
-    # Validate dimensions are consistent
     for r in rows:
         if r.vector.shape[0] != dim:
             raise ValueError(f"Inconsistent vector dims. Row id={r.row_id} has dim={r.vector.shape[0]} expected={dim}")
@@ -555,7 +532,6 @@ def main() -> None:
         )
         runs.append(run)
 
-    print("\nBenchmark Results")
     for run in runs:
         print_run(run)
 

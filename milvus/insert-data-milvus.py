@@ -141,8 +141,6 @@ def main():
     print(f"Using local dataset: {csv_path}")
 
     csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-
-    # 1) Load data
     df = pd.read_csv(csv_path)
     expected_columns = {"Class Index", "Title", "Description"}
     received_columns = set(df.columns)
@@ -161,8 +159,6 @@ def main():
 
     records_count = len(df)
     print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-
-    # 2) Load embedding model
     print("Loading sentence-transformers model...")
     model = SentenceTransformer(model_name)
 
@@ -173,8 +169,6 @@ def main():
             f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
-
-    # 3) Encode embeddings (E5 passage format)
     texts = [build_passage_text(t, d) for t, d in zip(df["title"], df["description"])]
 
     print("Encoding embeddings...")
@@ -193,17 +187,11 @@ def main():
         raise RuntimeError(f"Unexpected embedding shape: {embeddings.shape}")
 
     emb_lists = embeddings.tolist()
-
-    # 4) Prepare scalar columns
     ids = list(range(records_count))  # stable numeric IDs for benchmarking
     titles = [truncate_str(x, 1024) for x in df["title"].tolist()]
     descriptions = [truncate_str(x, 8192) for x in df["description"].tolist()]
     genres = [truncate_str(x, 64) for x in df["label"].tolist()]
-
-    # 5) Connect Milvus
     connections.connect(alias="default", host=host, port=port)
-
-    # 6) Recreate or protect existing collection
     if recreate_collection:
         cleanup_collection(table_name)
     else:
@@ -212,8 +200,6 @@ def main():
                 f"Collection '{table_name}' already exists. "
                 "Use --recreate true to overwrite or choose a different --collection."
             )
-
-    # 7) Create collection schema
     fields = [
         FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=False),
         FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=1024),
@@ -224,8 +210,6 @@ def main():
     schema = CollectionSchema(fields=fields, description="News articles with embeddings")
 
     collection = Collection(name=table_name, schema=schema, using="default", shards_num=2)
-
-    # 8) Insert + time
     print("Inserting into Milvus...")
     t_write0 = time.perf_counter()
 
@@ -244,8 +228,6 @@ def main():
 
     t_write1 = time.perf_counter()
     write_seconds = t_write1 - t_write0
-
-    # 9) Build HNSW index + time
     print("Building HNSW index...")
     t_idx0 = time.perf_counter()
 
@@ -279,8 +261,6 @@ def main():
 
     t_idx1 = time.perf_counter()
     index_seconds = t_idx1 - t_idx0
-
-    # 10) Summary
     db_count = int(collection.num_entities)
     approx_vec_mb = bytes_to_mb(db_count * EXPECTED_DIM * 4)
 

@@ -16,7 +16,7 @@ Notes vs pgvector version:
 
 Usage examples:
   python3 benchmark_recall_chroma.py
-  python3 benchmark_recall_chroma.py --k-values 1,5,10 --num-queries 500
+  python3 benchmark_recall_chroma.py --k-values 1,5,10 --num-queries 480
   python3 benchmark_recall_chroma.py --distance cosine
   python3 benchmark_recall_chroma.py --where-json '{"genre":"sports"}'
 """
@@ -39,11 +39,6 @@ except ImportError as e:
     raise SystemExit(
         "Missing dependency. Install with: pip install chromadb"
     ) from e
-
-
-# -----------------------------
-# Config (overridable via env)
-# -----------------------------
 CHROMA_MODE = (  # "http" (server) or "persistent" (local disk)
     __import__("os").getenv("CHROMA_MODE", "http").strip().lower()
 )
@@ -82,11 +77,6 @@ class BenchmarkRun:
     p50_latency_ms: float
     p95_latency_ms: float
     avg_latency_ms: float
-
-
-# -----------------------------
-# Metric helpers
-# -----------------------------
 def parse_k_values(text: str) -> list[int]:
     values: list[int] = []
     for part in text.split(","):
@@ -127,11 +117,6 @@ def recall_at_k(pred_ids: list[int | str], gt_ids: list[int | str], k: int) -> f
     pred_topk = pred_ids[:k]
     hit_count = len(set(pred_topk) & set(gt_topk))
     return hit_count / len(gt_topk)
-
-
-# -----------------------------
-# Exact ground truth (NumPy)
-# -----------------------------
 def maybe_normalize(matrix: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
@@ -180,11 +165,6 @@ def exact_topk_ids(
         if len(result_ids) >= k:
             break
     return result_ids
-
-
-# -----------------------------
-# Chroma loading and search
-# -----------------------------
 def get_client():
     if CHROMA_MODE == "http":
         return chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
@@ -273,11 +253,6 @@ def search_chroma(
 
     ids2 = ids2[: int(limit)]
     return SearchResult(ids=ids2, latency_ms=latency_ms)
-
-
-# -----------------------------
-# Benchmark runner
-# -----------------------------
 def benchmark_once(
     *,
     collection,
@@ -373,15 +348,20 @@ def benchmark_once(
 
 
 def print_run(run: BenchmarkRun) -> None:
-    print("=" * 80)
+    print("===============")
+    print("Benchmark Results")
+    print("===============")
     print(f"Run: {run.label}")
     print(f"Distance: {run.metric}")
     print(f"Measured queries: {run.num_queries}")
+    print("-------------------------------------")
     for k in run.k_values:
         print(f"Recall@{k}: {run.avg_recall_at_k[k]:.4f}")
+    print("-------------------------------------")
     print(f"Latency avg: {run.avg_latency_ms:.2f} ms")
     print(f"Latency p50: {run.p50_latency_ms:.2f} ms")
     print(f"Latency p95: {run.p95_latency_ms:.2f} ms")
+    print("-------------------------------------")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -393,9 +373,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Distance metric for exact ground truth",
     )
     p.add_argument("--k-values", default="1,5,10", help="Comma-separated K values, e.g. 1,5,10")
-    p.add_argument("--num-queries", type=int, default=500, help="Number of query rows to sample")
+    p.add_argument("--num-queries", type=int, default=480, help="Number of query rows to sample")
     p.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
-    p.add_argument("--warmup-queries", type=int, default=20, help="Warm-up queries excluded from stats")
+    p.add_argument("--warmup-queries", type=int, default=0, help="Warm-up queries excluded from stats")
     p.add_argument("--max-load-items", type=int, default=None, help="Optional cap when loading items (debugging)")
 
     # Chroma filter (recommended instead of SQL)
@@ -421,8 +401,6 @@ def main() -> None:
         raise ValueError("--num-queries must be > 0")
     if args.warmup_queries < 0:
         raise ValueError("--warmup-queries must be >= 0")
-
-    # parse filter
     where = None
     if args.where_json:
         try:
@@ -431,8 +409,6 @@ def main() -> None:
                 raise ValueError("where-json must decode to a JSON object (dict).")
         except Exception as e:
             raise ValueError(f"Invalid --where-json: {e}") from e
-
-    # consume (ignored) sweeps for compatibility
     ivf_sweep = parse_int_list(args.ivfflat_probes)
     hnsw_sweep = parse_int_list(args.hnsw_ef_search)
     if ivf_sweep and hnsw_sweep:
@@ -447,8 +423,6 @@ def main() -> None:
     rows = load_all_vectors(collection, where=where, limit=args.max_load_items)
     dim = int(rows[0].vector.shape[0])
     print(f"Loaded {len(rows)} vectors | dim={dim} | collection={COLLECTION_NAME}")
-
-    # Validate dimensions are consistent
     for r in rows:
         if r.vector.shape[0] != dim:
             raise ValueError(
@@ -466,7 +440,6 @@ def main() -> None:
         where=where,
     )
 
-    print("\nBenchmark Results")
     print_run(run)
     print("\nDone.")
 

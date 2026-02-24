@@ -16,7 +16,7 @@ Example:
     --host localhost --port 19530 \
     --collection news_articles \
     --distance cosine \
-    --num-queries 200 \
+    --num-queries 480 \
     --k-values 1,5,10 \
     --hnsw-ef 32,64,128,256
 
@@ -34,12 +34,6 @@ from typing import Dict, List, Tuple, Iterable, Optional
 import numpy as np
 
 from pymilvus import connections, Collection, utility
-
-
-# ----------------------------
-# Helpers
-# ----------------------------
-
 def parse_int_list(s: str) -> List[int]:
     return [int(x.strip()) for x in s.split(",") if x.strip()]
 
@@ -108,49 +102,32 @@ def normalize_distance_name(value: str) -> str:
     return "cosine"
 
 def print_run(
-    engine_label: str,
-    collection_name: str,
-    db_metric: str,
-    gt_metric: str,
-    num_vectors: int,
-    dim: int,
+    *,
+    label: str,
+    metric: str,
     num_queries: int,
     k_values: List[int],
     recall_map: Dict[int, float],
     latencies_ms: List[float],
-    ann_param_label: str,
-    ann_param_value,
 ):
     avg_ms = statistics.mean(latencies_ms) if latencies_ms else float("nan")
     p50_ms = percentile_ms(latencies_ms, 50)
     p95_ms = percentile_ms(latencies_ms, 95)
 
-    print("\n" + "=" * 72)
+    print("===============")
     print("Benchmark Results")
-    print("=" * 72)
-    print(f"Engine              : {engine_label}")
-    print(f"Collection           : {collection_name}")
-    print(f"DB Metric            : {db_metric}")
-    print(f"GT Metric (NumPy)    : {gt_metric}")
-    print(f"Vectors Loaded       : {num_vectors}")
-    print(f"Vector Dim           : {dim}")
-    print(f"Queries Benchmarked  : {num_queries}")
-    print(f"{ann_param_label:<20}: {ann_param_value}")
-    print("-" * 72)
-
+    print("===============")
+    print(f"Run: {label}")
+    print(f"Distance: {metric}")
+    print(f"Measured queries: {num_queries}")
+    print("-------------------------------------")
     for k in k_values:
-        print(f"Recall@{k:<2}          : {recall_map.get(k, float('nan')):.4f}")
-
-    print("-" * 72)
-    print(f"Latency avg (ms)     : {format_ms(avg_ms)}")
-    print(f"Latency p50 (ms)     : {format_ms(p50_ms)}")
-    print(f"Latency p95 (ms)     : {format_ms(p95_ms)}")
-    print("=" * 72)
-
-# ----------------------------
-# Exact Ground Truth (NumPy)
-# ----------------------------
-
+        print(f"Recall@{k}: {recall_map.get(k, float('nan')):.4f}")
+    print("-------------------------------------")
+    print(f"Latency avg: {format_ms(avg_ms)} ms")
+    print(f"Latency p50: {format_ms(p50_ms)} ms")
+    print(f"Latency p95: {format_ms(p95_ms)} ms")
+    print("-------------------------------------")
 class ExactGroundTruth:
     def __init__(self, ids: np.ndarray, vectors: np.ndarray, metric: str):
         self.ids = ids.astype(np.int64)
@@ -186,11 +163,6 @@ class ExactGroundTruth:
         ranked_ids = [rid for rid in ranked_ids if rid != query_id]
 
         return ranked_ids[:k]
-
-# ----------------------------
-# Milvus Data Loading
-# ----------------------------
-
 def load_all_ids_and_vectors(
     coll: Collection,
     batch_size: int = 10000,
@@ -248,11 +220,6 @@ def load_all_ids_and_vectors(
         raise RuntimeError("No vectors found in collection.")
 
     return ids_np, vecs_np
-
-# ----------------------------
-# Milvus ANN Search
-# ----------------------------
-
 def milvus_search_single(
     coll: Collection,
     query_vec: np.ndarray,
@@ -309,11 +276,6 @@ def milvus_search_single(
                 break
 
     return ids
-
-# ----------------------------
-# Main Benchmark
-# ----------------------------
-
 def run_benchmark_once(
     coll: Collection,
     all_ids: np.ndarray,
@@ -370,7 +332,7 @@ def main():
 
     parser.add_argument(
         "--distance",
-        default=os.getenv("MILVUS_DISTANCE", os.getenv("MILVUS_METRIC", "cosine")),
+        default="cosine",
         help="Distance for both Milvus search + NumPy GT: cosine | dot | ip | l2",
     )
     parser.add_argument(
@@ -379,7 +341,7 @@ def main():
         help="Milvus consistency level (Strong|Session|Bounded|Eventually|Customized).",
     )
 
-    parser.add_argument("--num-queries", type=int, default=200)
+    parser.add_argument("--num-queries", type=int, default=480)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--k-values", default="1,5,10")
 
@@ -420,8 +382,6 @@ def main():
 
     hnsw_efs = parse_int_list(args.hnsw_ef) if args.hnsw_ef.strip() else []
     nprobes = parse_int_list(args.nprobe) if args.nprobe.strip() else []
-
-    # Connect Milvus
     connections.connect(alias="default", host=args.host, port=str(args.port))
 
     if not utility.has_collection(args.collection):
@@ -440,15 +400,15 @@ def main():
     print(f"Benchmark Distance (requested): {args.distance}")
     print(f"Consistency Level: {args.consistency_level}")
 
-    # Milvus requires query metric to match the index metric. Fail early with guidance.
+    # Milvus requires query metric to match the index metric.
+    # Fail fast on mismatch so defaults remain explicit and reproducible.
     requested_distance = normalize_distance_name(args.distance)
     if idx_metric and requested_distance != detected_distance:
         raise ValueError(
             "Requested --distance does not match collection index metric. "
             f"requested={args.distance} (normalized={requested_distance}), "
             f"index_metric={idx_metric} (normalized={detected_distance}). "
-            "Use matching --distance or recreate the collection/index with the target metric "
-            "(e.g. set MILVUS_METRIC=IP when running milvus/insert-data-milvus.py for dot/IP benchmarking)."
+            "Recreate/reindex the collection with cosine (or pass matching --distance explicitly)."
         )
 
     print("Loading all IDs + vectors from Milvus...")
@@ -462,13 +422,9 @@ def main():
 
     n, dim = all_vecs.shape
     print(f"Loaded vectors: {n} | dim: {dim} | load time: {t1 - t0:.2f}s")
-
-    # Query sampling
     rng = np.random.default_rng(args.seed)
     num_queries = min(args.num_queries, n)
     query_indices = rng.choice(n, size=num_queries, replace=False)
-
-    # Decide sweep plan
     runs = []
 
     # If user specified both hnsw_ef and nprobe, sweep combinations.
@@ -489,22 +445,18 @@ def main():
         if label == "hnsw_ef":
             hnsw_ef = int(value)
             nprobe = None
-            ann_label = "hnsw_ef"
-            ann_value = hnsw_ef
+            run_label = f"hnsw_ef={hnsw_ef}"
         elif label == "nprobe":
             hnsw_ef = None
             nprobe = int(value)
-            ann_label = "nprobe"
-            ann_value = nprobe
+            run_label = f"nprobe={nprobe}"
         elif label == "hnsw_ef+nprobe":
             hnsw_ef, nprobe = int(value[0]), int(value[1])
-            ann_label = "hnsw_ef+nprobe"
-            ann_value = f"{hnsw_ef}, {nprobe}"
+            run_label = f"hnsw_ef={hnsw_ef}, nprobe={nprobe}"
         else:
             hnsw_ef = None
             nprobe = None
-            ann_label = "search_params"
-            ann_value = "default"
+            run_label = "default"
 
         recall_map, latency_ms = run_benchmark_once(
             coll=coll,
@@ -520,18 +472,12 @@ def main():
         )
 
         print_run(
-            engine_label="Milvus",
-            collection_name=args.collection,
-            db_metric=db_metric,
-            gt_metric=gt_metric,
-            num_vectors=n,
-            dim=dim,
+            label=run_label,
+            metric=db_metric,
             num_queries=num_queries,
             k_values=k_values,
             recall_map=recall_map,
             latencies_ms=latency_ms,
-            ann_param_label=ann_label,
-            ann_param_value=ann_value,
         )
 
     # Cleanup
@@ -540,6 +486,7 @@ def main():
     except Exception:
         pass
     connections.disconnect("default")
+    print("\nDone.")
 
 
 if __name__ == "__main__":

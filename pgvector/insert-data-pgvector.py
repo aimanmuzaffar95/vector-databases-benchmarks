@@ -84,8 +84,6 @@ def main():
     print(f"Using local dataset: {csv_path}")
 
     csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-
-    # 2) Load data
     df = pd.read_csv(csv_path)
     expected_columns = {"Class Index", "Title", "Description"}
     received_columns = set(df.columns)
@@ -105,8 +103,6 @@ def main():
 
     records_count = len(df)
     print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-
-    # 3) Load model + verify dim
     print("Loading sentence-transformers model...")
     model = SentenceTransformer(model_name)
 
@@ -118,8 +114,6 @@ def main():
             f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
-
-    # 4) Encode embeddings (E5 format: passage-prefixed title + description)
     texts = [
         build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
         for i in range(records_count)
@@ -142,11 +136,7 @@ def main():
          "embedding": emb_lists[i]}
         for i in range(records_count)
     ]
-
-    # 5) Connect DB
     engine = sa.create_engine(DATABASE_URL, future=True)
-
-    # 6) Schema
     with engine.begin() as conn:
         conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector;"))
 
@@ -162,8 +152,6 @@ def main():
                 embedding vector({EXPECTED_DIM})
             );
         """))
-
-    # 7) Insert + time
     insert_stmt = sa.text(f"""
         INSERT INTO {table_name} (title, description, genre, embedding)
         VALUES (:title, :description, :genre, :embedding)
@@ -177,8 +165,6 @@ def main():
             conn.execute(insert_stmt, payload[start:end])
     t_write1 = time.perf_counter()
     write_seconds = t_write1 - t_write0
-
-    # 8) Build index + time (HNSW cosine)
     with engine.begin() as conn:
         conn.execute(sa.text(f"DROP INDEX IF EXISTS {index_name};"))
 
@@ -192,12 +178,8 @@ def main():
         """))
     t_idx1 = time.perf_counter()
     index_seconds = t_idx1 - t_idx0
-
-    # 9) Verify inserted row count
     with engine.connect() as conn:
         db_count = conn.execute(sa.text(f"SELECT COUNT(*) FROM {table_name};")).scalar_one()
-
-    # 10) Size estimate of embeddings in MB (float32)
     approx_vec_mb = bytes_to_mb(db_count * EXPECTED_DIM * 4)
 
     print("\n==== SUMMARY ====")

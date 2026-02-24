@@ -16,20 +16,14 @@ LABEL_MAP = {
     3: "Business",
     4: "Sci/Tech",
 }
-
-# Chroma config (env-overridable)
 CHROMA_MODE = os.getenv("CHROMA_MODE", "http").strip().lower()  # "http" or "persistent"
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_data")
 
 COLLECTION_NAME_DEFAULT = os.getenv("COLLECTION_NAME", "news_articles")
-
-# Embeddings
 MODEL_NAME_DEFAULT = os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
 EXPECTED_DIM = 1024
-
-# Insert batching (important for large CSVs)
 BATCH_SIZE_DEFAULT = int(os.getenv("BATCH_SIZE", "512"))
 DISTANCE_DEFAULT = os.getenv("CHROMA_DISTANCE", "cosine").strip().lower()
 
@@ -94,8 +88,6 @@ def main():
     print(f"Using local dataset: {csv_path}")
 
     csv_size_mb = bytes_to_mb(os.path.getsize(csv_path))
-
-    # 2) Load data
     df = pd.read_csv(csv_path)
     expected_columns = {"Class Index", "Title", "Description"}
     received_columns = set(df.columns)
@@ -114,8 +106,6 @@ def main():
 
     records_count = len(df)
     print(f"Records: {records_count} | CSV size: {csv_size_mb:.2f} MB")
-
-    # 3) Load model + verify dim
     print("Loading sentence-transformers model...")
     model = SentenceTransformer(model_name)
 
@@ -127,8 +117,6 @@ def main():
             f"Model dimension is {dim}, expected {EXPECTED_DIM}. "
             f"Pick a 1024-d model (e.g., intfloat/e5-large-v2)."
         )
-
-    # 4) Encode embeddings
     texts = [
         build_passage_text(df.iloc[i]["title"], df.iloc[i]["description"])
         for i in range(records_count)
@@ -142,11 +130,7 @@ def main():
 
     # Convert to lists for Chroma
     emb_lists = [e.tolist() for e in embeddings]
-
-    # 5) Connect Chroma
     client = get_client()
-
-    # 6) "Schema" equivalent: recreate collection fresh
     cleanup_collection(client, collection_name)
 
     # Chroma metric is chosen at collection creation time via metadata.
@@ -155,8 +139,6 @@ def main():
         name=collection_name,
         metadata={"hnsw:space": distance},
     )
-
-    # 7) Insert + time
     print("Inserting into Chroma...")
     t_write0 = time.perf_counter()
 
@@ -186,8 +168,6 @@ def main():
 
     t_write1 = time.perf_counter()
     write_seconds = t_write1 - t_write0
-
-    # 8) "Index build time" proxy
     # Chroma doesn't have an explicit CREATE INDEX step like pgvector.
     # To keep the same output format, we measure time until the first query runs after insertion.
     print("Building HNSW index...")
@@ -199,11 +179,7 @@ def main():
     )
     t_idx1 = time.perf_counter()
     index_seconds = t_idx1 - t_idx0
-
-    # 9) Verify inserted row count
     db_count = collection.count()
-
-    # 10) Size estimate of embeddings in MB (float32)
     approx_vec_mb = bytes_to_mb(db_count * EXPECTED_DIM * 4)
 
     print("\n==== SUMMARY ====")
