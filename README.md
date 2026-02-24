@@ -2,6 +2,8 @@
 
 This project ingests `train.csv`, generates 1024-d embeddings using `intfloat/e5-large-v2`, stores vectors in multiple backends, and benchmarks Recall@K + latency.
 
+Special thanks to [Tahir Saeed](https://github.com/tahir-arbisoft) for his collaboration on this project.
+
 Supported backends:
 - `pgvector` (PostgreSQL)
 - `chroma`
@@ -18,7 +20,7 @@ Supported backends:
 Install dependencies:
 
 ```bash
-pip install pandas sqlalchemy psycopg2-binary sentence-transformers numpy chromadb qdrant-client weaviate-client pymilvus faiss-cpu
+pip3 install -r requirements.txt
 ```
 
 ## Quick Start (Unified Runner)

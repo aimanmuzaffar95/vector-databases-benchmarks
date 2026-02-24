@@ -1,0 +1,10 @@
+pandas
+sqlalchemy
+psycopg2-binary
+sentence-transformers
+numpy
+chromadb
+qdrant-client
+weaviate-client
+pymilvus
+faiss-cpu
