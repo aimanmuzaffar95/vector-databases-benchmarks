@@ -1,6 +1,6 @@
-# Vector DB Embedding Ingest + Recall Benchmarks
+# Vector DB Embedding Ingest + Recall/QPS Benchmarks
 
-This project ingests `train.csv`, generates 1024-d embeddings using `intfloat/e5-large-v2`, stores vectors in multiple backends, and benchmarks Recall@K + latency.
+This project ingests `train.csv`, generates 1024-d embeddings using `intfloat/e5-large-v2`, stores vectors in multiple backends, and benchmarks Recall@K + latency plus QPS throughput.
 
 Special thanks to [Tahir Saeed](https://github.com/tahir-arbisoft) for his collaboration on this project.
 
@@ -59,6 +59,27 @@ python3 run_benchmarks.py -dbname faiss --benchmark
 python3 run_benchmarks.py -dbname all --benchmark --benchmark-args "--k-values 1,5,10 --num-queries 300"
 ```
 
+## QPS Benchmarks (Standalone Scripts)
+
+QPS scripts are run per backend (not via `run_benchmarks.py`).
+
+Common example pattern:
+
+```bash
+python3 <backend>/benchmark-qps-<backend>.py --distance cosine --k 10 --seconds 20 --concurrency 8
+```
+
+Examples:
+
+```bash
+python3 pgvector/benchmark-qps-pgvector.py --distance cosine --k 10 --seconds 20 --concurrency 8
+python3 chroma/benchmark-qps-chroma.py --distance cosine --k 10 --seconds 20 --concurrency 8
+python3 qdrant/benchmark-qps-qdrant.py --distance cosine --k 10 --seconds 20 --concurrency 8
+python3 weaviate/benchmark-qps-weaviate.py --distance cosine --k 10 --seconds 20 --concurrency 8
+python3 milvus/benchmark-qps-milvus.py --distance cosine --k 10 --seconds 20 --concurrency 8
+python3 faiss/benchmark-qps-faiss.py --distance cosine --k 10 --seconds 20 --concurrency 8
+```
+
 ### Unified Runner Flags
 
 - `-dbname, --dbname` required; comma-separated backend names or `all`
@@ -88,6 +109,28 @@ Recall@10: 0.9860
 Latency avg: 0.25 ms
 Latency p50: 0.16 ms
 Latency p95: 0.37 ms
+-------------------------------------
+```
+
+QPS scripts (`benchmark-qps-*.py`) print in this standardized format:
+
+```text
+===============
+Benchmark Results
+===============
+Run: default
+Distance: cosine
+k: 10
+-------------------------------------
+Concurrency: 8
+Duration (s): 20.00 (warmup 2.00s)
+Measured queries: 394099
+QPS: 21894.39
+-------------------------------------
+Latency avg: 0.36 ms
+Latency p50: 0.30 ms
+Latency p95: 0.71 ms
+Latency p99: 1.36 ms
 -------------------------------------
 ```
 
@@ -126,6 +169,14 @@ After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated fi
 - `weaviate/benchmark-weaviate.py`
 - `milvus/benchmark-milvus.py`
 - `faiss/benchmark-faiss.py`
+
+### QPS benchmark scripts
+- `pgvector/benchmark-qps-pgvector.py`
+- `chroma/benchmark-qps-chroma.py`
+- `qdrant/benchmark-qps-qdrant.py`
+- `weaviate/benchmark-qps-weaviate.py`
+- `milvus/benchmark-qps-milvus.py`
+- `faiss/benchmark-qps-faiss.py`
 
 ### Shared embedding utilities
 - `shared/embedding_cache.py`
