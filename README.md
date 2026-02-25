@@ -303,3 +303,26 @@ faiss:
 - `FAISS_DISTANCE`, `FAISS_INDEX_TYPE`
 - `FAISS_IVF_NLIST`, `FAISS_HNSW_M`
 - `FAISS_OUTPUT_DIR`
+
+## Graphs
+
+### 00 Recall Graph
+<img src="graphs/00_recall_graph.png" alt="00 Recall Graph" width="900" />
+
+### 01 Recall Latency Graph
+<img src="graphs/01_recall_latency_graph.png" alt="01 Recall Latency Graph" width="900" />
+
+### 02 QPS Graph
+<img src="graphs/02_qps_graph.png" alt="02 QPS Graph" width="900" />
+
+### 03 QPS Latency Graph
+<img src="graphs/03_qps_latency_graph.png" alt="03 QPS Latency Graph" width="900" />
+
+### 04 QPS with Latency Graph
+<img src="graphs/04_qps_with_latency_graph.png" alt="04 QPS with Latency Graph" width="900" />
+
+### 05 Index Build and Write Time Graph
+<img src="graphs/05_index_build_and_write_time_graph.png" alt="05 Index Build and Write Time Graph" width="900" />
+
+### 10 Normalized Heatmap
+<img src="graphs/chart_10_normalized_heatmap.png" alt="10 Normalized Heatmap" width="900" />

@@ -427,7 +427,7 @@ def print_insert_table(records: list[InsertRecord]) -> None:
         "Embedding Source",
         "Embedding time (s)",
         "Write time (s)",
-        "Build time (s)",
+        "Index Build time (s)",
     ]
     rows = [
         [
