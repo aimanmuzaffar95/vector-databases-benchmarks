@@ -1,0 +1,13 @@
+DB,Run,Distance,Queries,Recall@1,Recall@5,Recall@10,Lat avg (ms),Lat p50 (ms),Lat p95 (ms),QPS,Lat-QPS avg (ms),Lat-QPS p50 (ms),Lat-QPS p95 (ms),Lat-QPS p99 (ms)
+pgvector,default,cosine,480,0.9958,0.9925,0.9902,2.18,2.03,3.40,-,-,-,-,-
+pgvector,default,cosine,20126,-,-,-,-,-,-,2515.75,2.89,2.04,6.81,10.25
+chroma,default,cosine,480,0.9979,0.9979,0.9977,5.45,5.34,6.93,-,-,-,-,-
+chroma,default,cosine,3017,-,-,-,-,-,-,377.12,21.20,20.94,24.98,29.95
+qdrant,exact=False,cosine,480,1.0000,0.9996,0.9992,8.79,8.60,10.57,-,-,-,-,-
+qdrant,default,cosine,2036,-,-,-,-,-,-,254.50,31.39,30.83,41.97,50.39
+weaviate,exact=False,cosine,480,1.0000,1.0000,0.9990,20.89,20.76,21.68,-,-,-,-,-
+weaviate,default,cosine,11975,-,-,-,-,-,-,1496.88,5.27,5.08,7.70,9.37
+milvus,default,cosine,480,0.9875,0.9871,0.9840,3.70,3.17,3.70,-,-,-,-,-
+milvus,default,cosine,18622,-,-,-,-,-,-,2327.75,3.43,3.26,5.05,6.54
+faiss,default,cosine,480,0.9917,0.9883,0.9860,0.21,0.18,0.25,-,-,-,-,-
+faiss,default,cosine,161653,-,-,-,-,-,-,20206.62,0.39,0.35,0.71,1.04

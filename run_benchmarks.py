@@ -537,6 +537,81 @@ def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
         print(fmt(row))
 
 
+def _build_single_benchmark_table(records: list[BenchmarkRecord], benchmark_type: str) -> tuple[list[str], list[list[str]]]:
+    filtered = [r for r in records if r.benchmark_type == benchmark_type]
+    if not filtered:
+        return [], []
+
+    headers = ["DB", "Run", "Distance", "Queries"]
+    rows: list[list[str]] = []
+
+    if benchmark_type == "recall":
+        headers.extend(["Recall@1", "Recall@5", "Recall@10", "Lat avg (ms)", "Lat p50 (ms)", "Lat p95 (ms)"])
+        for r in filtered:
+            rows.append(
+                [
+                    r.db_name,
+                    r.run,
+                    r.distance,
+                    r.measured_queries,
+                    r.recall_at_1,
+                    r.recall_at_5,
+                    r.recall_at_10,
+                    r.latency_avg_ms,
+                    r.latency_p50_ms,
+                    r.latency_p95_ms,
+                ]
+            )
+    elif benchmark_type == "qps":
+        headers.extend(["QPS", "Lat avg (ms)", "Lat p50 (ms)", "Lat p95 (ms)", "Lat p99 (ms)"])
+        for r in filtered:
+            rows.append(
+                [
+                    r.db_name,
+                    r.run,
+                    r.distance,
+                    r.measured_queries,
+                    r.qps,
+                    r.latency_qps_avg_ms,
+                    r.latency_qps_p50_ms,
+                    r.latency_qps_p95_ms,
+                    r.latency_qps_p99_ms,
+                ]
+            )
+    else:
+        return [], []
+
+    return headers, rows
+
+
+def _print_table(title: str, headers: list[str], rows: list[list[str]]) -> None:
+    if not headers:
+        return
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(cell))
+
+    def fmt(row: list[str]) -> str:
+        return " | ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(row))
+
+    sep = "-+-".join("-" * w for w in widths)
+
+    print(f"\n{title}")
+    print(fmt(headers))
+    print(sep)
+    for row in rows:
+        print(fmt(row))
+
+
+def print_benchmark_tables(records: list[BenchmarkRecord]) -> None:
+    recall_headers, recall_rows = _build_single_benchmark_table(records, "recall")
+    qps_headers, qps_rows = _build_single_benchmark_table(records, "qps")
+    _print_table("Final Recall Benchmark Table", recall_headers, recall_rows)
+    _print_table("Final QPS Benchmark Table", qps_headers, qps_rows)
+
+
 def write_benchmark_csv(records: list[BenchmarkRecord], csv_path: str) -> None:
     headers, rows = build_benchmark_table(records)
     if not headers:
@@ -690,7 +765,7 @@ def main() -> int:
         print(f"- {db_name:8} | {step_name:9} | {status}")
 
     print_insert_table(insert_records)
-    print_benchmark_table(benchmark_records)
+    print_benchmark_tables(benchmark_records)
     write_benchmark_csv(benchmark_records, args.benchmark_csv_path)
 
     return 1 if any_failed else 0
