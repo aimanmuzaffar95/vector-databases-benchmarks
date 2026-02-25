@@ -1,10 +1,13 @@
 DB,Run,Distance,Queries,Recall@1,Recall@5,Recall@10,Lat avg (ms),Lat p50 (ms),Lat p95 (ms),QPS,Lat-QPS avg (ms),Lat-QPS p50 (ms),Lat-QPS p95 (ms),Lat-QPS p99 (ms)
-chroma,default,cosine,480,0.9958,0.9971,0.9965,5.01,5.01,6.20,-,-,-,-,-
-chroma,default,cosine,3084,-,-,-,-,-,-,385.50,20.75,20.63,24.81,28.17
-qdrant,exact=False,cosine,480,1.0000,1.0000,0.9996,8.14,7.96,9.54,-,-,-,-,-
-qdrant,default,cosine,2111,-,-,-,-,-,-,263.88,30.25,29.79,39.95,46.07
-weaviate,exact=False,cosine,480,1.0000,1.0000,0.9990,20.53,20.38,21.47,-,-,-,-,-
-weaviate,default,cosine,13100,-,-,-,-,-,-,1637.50,4.80,4.68,6.78,8.52
-milvus,default,cosine,18113,-,-,-,-,-,-,2264.12,3.53,3.34,5.31,6.86
-faiss,default,cosine,480,0.9917,0.9883,0.9860,0.20,0.19,0.25,-,-,-,-,-
-faiss,default,cosine,161665,-,-,-,-,-,-,20208.12,0.39,0.35,0.71,1.09
+pgvector,default,cosine,480,0.9979,0.9946,0.9931,2.16,2.08,3.16,-,-,-,-,-
+pgvector,default,cosine,19785,-,-,-,-,-,-,2473.12,2.94,2.33,6.33,9.37
+chroma,default,cosine,480,1.0000,0.9979,0.9967,5.37,5.30,6.81,-,-,-,-,-
+chroma,default,cosine,2967,-,-,-,-,-,-,370.88,21.55,21.36,25.99,30.43
+qdrant,exact=False,cosine,480,0.9979,0.9992,0.9992,8.66,8.58,10.40,-,-,-,-,-
+qdrant,default,cosine,2051,-,-,-,-,-,-,256.38,31.19,30.76,41.95,47.90
+weaviate,exact=False,cosine,480,1.0000,1.0000,0.9992,20.75,20.55,21.84,-,-,-,-,-
+weaviate,default,cosine,11673,-,-,-,-,-,-,1459.12,5.41,5.18,8.04,11.06
+milvus,default,cosine,480,0.9896,0.9863,0.9833,3.67,2.74,3.51,-,-,-,-,-
+milvus,default,cosine,18056,-,-,-,-,-,-,2257.00,3.54,3.35,5.28,7.27
+faiss,default,cosine,480,0.9917,0.9883,0.9860,0.19,0.18,0.24,-,-,-,-,-
+faiss,default,cosine,161472,-,-,-,-,-,-,20184.00,0.39,0.35,0.72,1.06

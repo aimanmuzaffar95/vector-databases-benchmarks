@@ -99,30 +99,42 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run docker, insert, recall benchmark, and QPS workflows across one or more vector DB backends."
     )
-    parser.add_argument("-dbname", "--dbname", required=True, help="DB name(s): qdrant,pgvector or all")
-    parser.add_argument("--insert", action="store_true", help="Run insert script(s)")
-    parser.add_argument("--recall", action="store_true", help="Run recall benchmark script(s)")
-    parser.add_argument("--qps", action="store_true", help="Run QPS benchmark script(s)")
-    parser.add_argument("--docker", action="store_true", help="Start DB container(s) with docker compose")
     parser.add_argument(
+        "-d",
+        "-dbname",
+        "--db-name",
+        "--dbname",
+        dest="dbname",
+        required=True,
+        help="DB name(s): qdrant,pgvector or all",
+    )
+    parser.add_argument("-i", "--insert", action="store_true", help="Run insert script(s)")
+    parser.add_argument("-r", "--recall", "--recal", action="store_true", help="Run recall benchmark script(s)")
+    parser.add_argument("-q", "--qps", action="store_true", help="Run QPS benchmark script(s)")
+    parser.add_argument("-D", "--docker", action="store_true", help="Start DB container(s) with docker compose")
+    parser.add_argument(
+        "-I",
         "--insert-args",
         default="",
         help='Extra args forwarded only to insert scripts. Example: "--distance cosine --batch-size 128"',
     )
     parser.add_argument(
+        "-R",
         "--recall-args",
         default="",
         help='Extra args forwarded only to recall benchmark scripts. Example: "--k-values 1,5 --num-queries 100"',
     )
     parser.add_argument(
+        "-Q",
         "--qps-args",
         default="",
         help='Extra args forwarded only to QPS benchmark scripts. Example: "--k 10 --seconds 20 --concurrency 8"',
     )
     parser.add_argument(
+        "-o",
         "--benchmark-csv-path",
         default="benchmark.csv",
-        help="Output path for consolidated benchmark table as CSV (default: benchmark_results.csv)",
+        help="Output path for consolidated benchmark table as CSV (default: benchmark.csv)",
     )
     return parser
 

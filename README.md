@@ -28,92 +28,97 @@ pip3 install -r requirements.txt
 Use `run_benchmarks.py` to orchestrate docker / insert / recall benchmark / QPS steps across one or more backends.
 
 ```bash
-python3 run_benchmarks.py -dbname all --docker --insert --recall --qps
+python3 run_benchmarks.py -d all -D -i -r -q -o outputs/benchmark.csv
 ```
 
 ## CLI Parameters (Complete Reference)
 
-- `-dbname, --dbname` (required): target backends. Use comma-separated names (`pgvector,qdrant`) or `all`.
-- `--docker`: start backend containers using each backend's compose file. `faiss` is automatically skipped as local-only.
-- `--insert`: run backend insert scripts. If enabled, shared embeddings are precomputed once before the first backend insert unless disabled.
-- `--recall`: run recall/latency benchmark scripts (`benchmark-*.py`).
-- `--qps`: run throughput benchmark scripts (`benchmark-qps-*.py`).
-- `--insert-args "..."`: pass-through args only for insert scripts.
-- `--recall-args "..."`: pass-through args only for recall scripts.
-- `--qps-args "..."`: pass-through args only for QPS scripts.
+- `-d, --db-name` (required): target backends. Use comma-separated names (`pgvector,qdrant`) or `all`.
+- `-D, --docker`: start backend containers using each backend's compose file. `faiss` is `N/A (local backend)`.
+- `-i, --insert`: run backend insert scripts. If enabled, shared embeddings are precomputed once before the first backend insert unless disabled.
+- `-r, --recall`: run recall/latency benchmark scripts (`benchmark-*.py`).
+- `-q, --qps`: run throughput benchmark scripts (`benchmark-qps-*.py`).
+- `-I, --insert-args "..."`: pass-through args only for insert scripts.
+- `-R, --recall-args "..."`: pass-through args only for recall scripts.
+- `-Q, --qps-args "..."`: pass-through args only for QPS scripts.
+- `-o, --benchmark-csv-path`: output path for consolidated benchmark CSV (default: `benchmark.csv`).
+- Backward-compatible aliases are still accepted: `-dbname`, `--dbname`, and `--recal`.
 
 Parameter defaults and behavior:
 
-- At least one action flag is required: `--docker`, `--insert`, `--recall`, or `--qps`.
-- `--dbname all` expands to: `pgvector,chroma,qdrant,weaviate,milvus,faiss`.
+- At least one action flag is required: `--docker`, `--insert`, `--recall`, or `--qps` (or short forms).
+- `--db-name all` (or `-d all`) expands to: `pgvector,chroma,qdrant,weaviate,milvus,faiss`.
 - `--distance cosine` is auto-added to insert/recall/qps arg groups if missing.
 - `--num-queries 480` is auto-added to recall args if missing.
 - `--insert` precompute step is skipped when `--insert-args` includes `--no-embedding-cache`.
 - Invalid quoted arg strings (for example unmatched quotes) in `--insert-args`, `--recall-args`, or `--qps-args` will stop execution with a parser error.
+- Docker handling:
+  - Fatal and immediate stop: Docker daemon not running, or Docker CLI not found.
+  - Per-DB docker/container issues are reported in `Summary`; that DB's benchmark steps are marked as skipped while other DBs continue.
 
 ## Action Combinations (All Valid Non-Empty Sets)
 
 Template:
 
 ```bash
-python3 run_benchmarks.py -dbname <db|db1,db2|all> <action flags>
+python3 run_benchmarks.py -d <db|db1,db2|all> <action flags>
 ```
 
 Every possible action combination:
 
 ```bash
 # 1 action
-python3 run_benchmarks.py -dbname all --docker
-python3 run_benchmarks.py -dbname all --insert
-python3 run_benchmarks.py -dbname all --recall
-python3 run_benchmarks.py -dbname all --qps
+python3 run_benchmarks.py -d all -D
+python3 run_benchmarks.py -d all -i
+python3 run_benchmarks.py -d all -r
+python3 run_benchmarks.py -d all -q
 
 # 2 actions
-python3 run_benchmarks.py -dbname all --docker --insert
-python3 run_benchmarks.py -dbname all --docker --recall
-python3 run_benchmarks.py -dbname all --docker --qps
-python3 run_benchmarks.py -dbname all --insert --recall
-python3 run_benchmarks.py -dbname all --insert --qps
-python3 run_benchmarks.py -dbname all --recall --qps
+python3 run_benchmarks.py -d all -D -i
+python3 run_benchmarks.py -d all -D -r
+python3 run_benchmarks.py -d all -D -q
+python3 run_benchmarks.py -d all -i -r
+python3 run_benchmarks.py -d all -i -q
+python3 run_benchmarks.py -d all -r -q
 
 # 3 actions
-python3 run_benchmarks.py -dbname all --docker --insert --recall
-python3 run_benchmarks.py -dbname all --docker --insert --qps
-python3 run_benchmarks.py -dbname all --docker --recall --qps
-python3 run_benchmarks.py -dbname all --insert --recall --qps
+python3 run_benchmarks.py -d all -D -i -r
+python3 run_benchmarks.py -d all -D -i -q
+python3 run_benchmarks.py -d all -D -r -q
+python3 run_benchmarks.py -d all -i -r -q
 
 # 4 actions
-python3 run_benchmarks.py -dbname all --docker --insert --recall --qps
+python3 run_benchmarks.py -d all -D -i -r -q
 ```
 
 Recommended practical examples:
 
 ```bash
 # Insert only for pgvector and qdrant
-python3 run_benchmarks.py -dbname pgvector,qdrant --insert
+python3 run_benchmarks.py -d pgvector,qdrant -i
 
 # Force rebuild of shared embedding cache before insert
-python3 run_benchmarks.py -dbname all --insert --insert-args "--force-rebuild-embeddings"
+python3 run_benchmarks.py -d all -i -I "--force-rebuild-embeddings"
 
 # Use a custom embedding cache directory
-python3 run_benchmarks.py -dbname all --insert --insert-args "--cache-dir .cache/embeddings"
+python3 run_benchmarks.py -d all -i -I "--cache-dir .cache/embeddings"
 
 # Disable shared cache and fall back to per-script embedding
-python3 run_benchmarks.py -dbname all --insert --insert-args "--no-embedding-cache"
+python3 run_benchmarks.py -d all -i -I "--no-embedding-cache"
 
 # Recall benchmark only faiss
-python3 run_benchmarks.py -dbname faiss --recall
+python3 run_benchmarks.py -d faiss -r
 
 # Forward extra args to recall benchmark scripts
-python3 run_benchmarks.py -dbname all --recall --recall-args "--k-values 1,5,10 --num-queries 300"
+python3 run_benchmarks.py -d all -r -R "--k-values 1,5,10 --num-queries 300"
 
 # Forward extra args to QPS scripts
-python3 run_benchmarks.py -dbname qdrant --qps --qps-args "--k 10 --seconds 20 --concurrency 8"
+python3 run_benchmarks.py -d qdrant -q -Q "--k 10 --seconds 20 --concurrency 8"
 ```
 
 ## QPS Benchmarks
 
-QPS scripts can be run via `run_benchmarks.py --qps` or standalone per backend.
+QPS scripts can be run via `run_benchmarks.py -q` (or `--qps`) or standalone per backend.
 
 Common example pattern:
 
@@ -176,14 +181,35 @@ Latency p99: 1.36 ms
 -------------------------------------
 ```
 
-After all benchmark scripts finish, `run_benchmarks.py` prints a consolidated final table:
+After all benchmark scripts finish, `run_benchmarks.py` prints separate final tables:
 
+- `Final Recall Benchmark Table`
+- `Final QPS Benchmark Table`
+
+Recall table columns:
 - `DB`
 - `Run`
 - `Distance`
 - `Queries`
-- If recall benchmarks ran: `Recall@1`, `Recall@5`, `Recall@10`, `Lat avg (ms)`, `Lat p50 (ms)`, `Lat p95 (ms)`
-- If QPS benchmarks ran: `QPS`, `Lat-QPS avg (ms)`, `Lat-QPS p50 (ms)`, `Lat-QPS p95 (ms)`, `Lat-QPS p99 (ms)`
+- `Recall@1`
+- `Recall@5`
+- `Recall@10`
+- `Lat avg (ms)`
+- `Lat p50 (ms)`
+- `Lat p95 (ms)`
+
+QPS table columns:
+- `DB`
+- `Run`
+- `Distance`
+- `Queries`
+- `QPS`
+- `Lat avg (ms)`
+- `Lat p50 (ms)`
+- `Lat p95 (ms)`
+- `Lat p99 (ms)`
+
+`run_benchmarks.py` also writes a consolidated benchmark CSV via `-o/--benchmark-csv-path` (default: `benchmark.csv`).
 
 `run_benchmarks.py` also prints a consolidated insert table:
 
