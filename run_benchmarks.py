@@ -121,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--benchmark-csv-path",
-        default="benchmark_results.csv",
+        default="benchmark.csv",
         help="Output path for consolidated benchmark table as CSV (default: benchmark_results.csv)",
     )
     return parser
@@ -204,6 +204,56 @@ def run_step(
     status = "OK" if ok else f"FAIL (exit={result.returncode})"
     print(f"[{db_name}] {step_name}: {status}")
     return ok, status, output
+
+
+def classify_docker_error(output: str) -> str:
+    text = output.lower()
+    if (
+        "cannot connect to the docker daemon" in text
+        or "is the docker daemon running" in text
+        or "error during connect" in text
+    ):
+        return "FAIL (Docker daemon is not running)"
+    if "command not found" in text and "docker" in text:
+        return "FAIL (Docker CLI not found)"
+    return "FAIL (Docker command failed; see logs above)"
+
+
+def is_fatal_docker_status(status: str) -> bool:
+    return (
+        "Docker daemon is not running" in status
+        or "Docker CLI not found" in status
+    )
+
+
+def check_docker_container_status(db_name: str, cfg: DBConfig) -> tuple[bool, str]:
+    if cfg.docker_compose is None:
+        return True, "N/A (local backend)"
+
+    cmd = ["docker", "compose", "-f", cfg.docker_compose, "ps", "--status", "running", "--services"]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False, "FAIL (Docker CLI not found)"
+
+    output = result.stdout or ""
+    if result.returncode != 0:
+        return False, classify_docker_error(output)
+
+    services = [line.strip() for line in output.splitlines() if line.strip()]
+    if not services:
+        return (
+            False,
+            f"FAIL (Container not running; start with: docker compose -f {cfg.docker_compose} up -d)",
+        )
+    return True, f"OK ({', '.join(services)} running)"
 
 
 def ensure_embedding_cache(insert_args: list[str]) -> tuple[bool, str]:
@@ -559,6 +609,18 @@ def main() -> int:
 
     for db_name in selected_dbs:
         cfg = DB_CONFIG[db_name]
+        can_run_db_steps = True
+        skip_reason = "SKIPPED (docker unavailable for this DB)"
+
+        if (args.insert or args.recall or args.qps) and not args.docker:
+            ok, docker_status = check_docker_container_status(db_name, cfg)
+            summary.append((db_name, "docker", docker_status))
+            if not ok:
+                any_failed = True
+                print(f"[{db_name}] docker: {docker_status}")
+                if is_fatal_docker_status(docker_status):
+                    break
+                can_run_db_steps = False
 
         if args.insert and db_name == selected_dbs[0]:
             ok, status = ensure_embedding_cache(insert_args)
@@ -569,15 +631,30 @@ def main() -> int:
 
         if args.docker:
             if cfg.docker_compose is None:
-                msg = "SKIPPED (local backend)"
+                msg = "N/A (local backend)"
                 print(f"[{db_name}] docker: {msg}")
                 summary.append((db_name, "docker", msg))
             else:
                 cmd = ["docker", "compose", "-f", cfg.docker_compose, "up", "-d"]
-                ok, status, _ = run_step(db_name, "docker", cmd)
+                ok, status, output = run_step(db_name, "docker", cmd, capture_output=True)
+                if not ok:
+                    status = classify_docker_error(output)
                 summary.append((db_name, "docker", status))
                 if not ok:
                     any_failed = True
+                    print(f"[{db_name}] docker: {status}")
+                    if is_fatal_docker_status(status):
+                        break
+                    can_run_db_steps = False
+
+        if not can_run_db_steps:
+            if args.insert:
+                summary.append((db_name, "insert", skip_reason))
+            if args.recall:
+                summary.append((db_name, "recall", skip_reason))
+            if args.qps:
+                summary.append((db_name, "qps", skip_reason))
+            continue
 
         if args.insert:
             cmd = [sys.executable, cfg.insert_script, *insert_args]
