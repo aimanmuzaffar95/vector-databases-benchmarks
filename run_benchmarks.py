@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import shlex
 import subprocess
@@ -117,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--qps-args",
         default="",
         help='Extra args forwarded only to QPS benchmark scripts. Example: "--k 10 --seconds 20 --concurrency 8"',
+    )
+    parser.add_argument(
+        "--benchmark-csv-path",
+        default="benchmark_results.csv",
+        help="Output path for consolidated benchmark table as CSV (default: benchmark_results.csv)",
     )
     return parser
 
@@ -390,9 +396,9 @@ def print_insert_table(records: list[InsertRecord]) -> None:
         print(fmt(row))
 
 
-def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
+def build_benchmark_table(records: list[BenchmarkRecord]) -> tuple[list[str], list[list[str]]]:
     if not records:
-        return
+        return [], []
 
     has_recall = any(r.benchmark_type == "recall" for r in records)
     has_qps = any(r.benchmark_type == "qps" for r in records)
@@ -456,6 +462,14 @@ def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
             )
         rows.append(row)
 
+    return headers, rows
+
+
+def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
+    headers, rows = build_benchmark_table(records)
+    if not headers:
+        return
+
     widths = [len(h) for h in headers]
     for row in rows:
         for idx, cell in enumerate(row):
@@ -471,6 +485,22 @@ def print_benchmark_table(records: list[BenchmarkRecord]) -> None:
     print(sep)
     for row in rows:
         print(fmt(row))
+
+
+def write_benchmark_csv(records: list[BenchmarkRecord], csv_path: str) -> None:
+    headers, rows = build_benchmark_table(records)
+    if not headers:
+        return
+
+    output_path = Path(csv_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        writer.writerows(rows)
+
+    print(f"Benchmark CSV written: {output_path}")
 
 
 def main() -> int:
@@ -584,6 +614,7 @@ def main() -> int:
 
     print_insert_table(insert_records)
     print_benchmark_table(benchmark_records)
+    write_benchmark_csv(benchmark_records, args.benchmark_csv_path)
 
     return 1 if any_failed else 0
 
